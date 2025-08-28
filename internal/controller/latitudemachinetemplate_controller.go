@@ -2,8 +2,8 @@ package controllers
 
 import (
 	"context"
-	"sigs.k8s.io/controller-runtime/pkg/client"
 	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 
 	infrav1 "github.com/latitudesh/cluster-api-provider-latitudesh/api/v1beta1"
@@ -29,4 +29,3 @@ func (r *LatitudeMachineTemplateReconciler) SetupWithManager(mgr ctrl.Manager) e
 		For(&infrav1.LatitudeMachineTemplate{}).
 		Complete(r)
 }
-

@@ -57,7 +57,7 @@ func (r *LatitudeMachineReconciler) Reconcile(ctx context.Context, req ctrl.Requ
 
 	// Hello world: define um ProviderID fake e marca Ready
 	pid := fmt.Sprintf("latitude:///hello-%s", lm.Name)
-	lm.Status.ProviderID = pid        // <- field string
+	lm.Status.ProviderID = pid // <- field string
 	lm.Status.Ready = true
 
 	// Evento
@@ -81,4 +81,3 @@ func (r *LatitudeMachineReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		For(&infrav1.LatitudeMachine{}).
 		Complete(r)
 }
-

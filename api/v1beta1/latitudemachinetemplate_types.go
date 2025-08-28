@@ -33,4 +33,3 @@ type LatitudeMachineTemplateList struct {
 func init() {
 	SchemeBuilder.Register(&LatitudeMachineTemplate{}, &LatitudeMachineTemplateList{})
 }
-

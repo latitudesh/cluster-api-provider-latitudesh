@@ -13,8 +13,7 @@ const (
 // +groupName=infrastructure.cluster.x-k8s.io
 
 var (
-	GroupVersion = schema.GroupVersion{Group: Group, Version: "v1beta1"}
+	GroupVersion  = schema.GroupVersion{Group: Group, Version: "v1beta1"}
 	SchemeBuilder = &scheme.Builder{GroupVersion: GroupVersion}
-	AddToScheme = SchemeBuilder.AddToScheme
+	AddToScheme   = SchemeBuilder.AddToScheme
 )
-

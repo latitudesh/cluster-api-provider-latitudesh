@@ -63,4 +63,3 @@ func (r *LatitudeClusterReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		For(&infrav1.LatitudeCluster{}).
 		Complete(r)
 }
-
