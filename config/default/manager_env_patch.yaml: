@@ -1,0 +1,22 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: controller-manager     # se você usa namePrefix (ex.: capl-), o nome final vira capl-controller-manager
+  namespace: capl-system       # ajuste p/ o seu ns
+spec:
+  template:
+    spec:
+      containers:
+        - name: manager
+          env:
+            - name: LATITUDESH_BEARER
+              valueFrom:
+                secretKeyRef:
+                  name: latitudesh-credentials
+                  key: API_TOKEN
+            - name: LATITUDESH_BASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: latitudesh-credentials
+                  key: BASE_URL
+

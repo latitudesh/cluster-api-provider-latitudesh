@@ -1,63 +1,84 @@
-/*
-Copyright 2025.
-
-Licensed under the Apache License, Version 2.0 (the "License");
-you may not use this file except in compliance with the License.
-You may obtain a copy of the License at
-
-    http://www.apache.org/licenses/LICENSE-2.0
-
-Unless required by applicable law or agreed to in writing, software
-distributed under the License is distributed on an "AS IS" BASIS,
-WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-See the License for the specific language governing permissions and
-limitations under the License.
-*/
-
-package controller
+package controllers
 
 import (
 	"context"
+	"fmt"
 
+	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/client-go/tools/record"
+
+	infrav1 "github.com/latitudesh/cluster-api-provider-latitudesh/api/v1beta1"
+
+	"sigs.k8s.io/cluster-api/util/patch"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
-	logf "sigs.k8s.io/controller-runtime/pkg/log"
-
-	infrastructurev1beta1 "github.com/latitudesh/cluster-api-provider-latitudesh/api/v1beta1"
+	crlog "sigs.k8s.io/controller-runtime/pkg/log"
 )
 
-// LatitudeMachineReconciler reconciles a LatitudeMachine object
-type LatitudeMachineReconciler struct {
-	client.Client
-	Scheme *runtime.Scheme
-}
-
+// RBAC para nossos CRDs
 // +kubebuilder:rbac:groups=infrastructure.cluster.x-k8s.io,resources=latitudemachines,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=infrastructure.cluster.x-k8s.io,resources=latitudemachines/status,verbs=get;update;patch
 // +kubebuilder:rbac:groups=infrastructure.cluster.x-k8s.io,resources=latitudemachines/finalizers,verbs=update
+// Eventos
+// +kubebuilder:rbac:groups="",resources=events,verbs=create;patch
 
-// Reconcile is part of the main kubernetes reconciliation loop which aims to
-// move the current state of the cluster closer to the desired state.
-// TODO(user): Modify the Reconcile function to compare the state specified by
-// the LatitudeMachine object against the actual cluster state, and then
-// perform operations to make the cluster state reflect the state specified by
-// the user.
-//
-// For more details, check Reconcile and its Result here:
-// - https://pkg.go.dev/sigs.k8s.io/controller-runtime@v0.21.0/pkg/reconcile
+type LatitudeMachineReconciler struct {
+	client.Client
+	Scheme   *runtime.Scheme
+	recorder record.EventRecorder
+}
+
 func (r *LatitudeMachineReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
-	_ = logf.FromContext(ctx)
+	log := crlog.FromContext(ctx).WithValues("latitudemachine", req.NamespacedName)
+	log.Info("reconcile start")
 
-	// TODO(user): your logic here
+	// Carrega o objeto
+	lm := &infrav1.LatitudeMachine{}
+	if err := r.Get(ctx, req.NamespacedName, lm); err != nil {
+		return ctrl.Result{}, client.IgnoreNotFound(err)
+	}
 
+	// Se está deletando, nada a fazer no hello-world
+	if !lm.DeletionTimestamp.IsZero() {
+		return ctrl.Result{}, nil
+	}
+
+	// Se já está pronto, não faz nada
+	if lm.Status.Ready {
+		return ctrl.Result{}, nil
+	}
+
+	// Patch helper para atualizar status de forma segura
+	ph, err := patch.NewHelper(lm, r.Client)
+	if err != nil {
+		return ctrl.Result{}, err
+	}
+
+	// Hello world: define um ProviderID fake e marca Ready
+	pid := fmt.Sprintf("latitude:///hello-%s", lm.Name)
+	lm.Status.ProviderID = pid        // <- field string
+	lm.Status.Ready = true
+
+	// Evento
+	if r.recorder != nil {
+		r.recorder.Eventf(lm, corev1.EventTypeNormal, "HelloWorld",
+			"Assigned fake ProviderID %q and marked Ready", pid)
+	}
+
+	// Aplica patch
+	if err := ph.Patch(ctx, lm); err != nil {
+		return ctrl.Result{}, err
+	}
+
+	log.Info("reconcile done", "providerID", pid)
 	return ctrl.Result{}, nil
 }
 
-// SetupWithManager sets up the controller with the Manager.
 func (r *LatitudeMachineReconciler) SetupWithManager(mgr ctrl.Manager) error {
+	r.recorder = mgr.GetEventRecorderFor("capl-latitudemachine")
 	return ctrl.NewControllerManagedBy(mgr).
-		For(&infrastructurev1beta1.LatitudeMachine{}).
-		Named("latitudemachine").
+		For(&infrav1.LatitudeMachine{}).
 		Complete(r)
 }
+

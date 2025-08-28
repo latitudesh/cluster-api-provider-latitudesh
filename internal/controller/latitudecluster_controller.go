@@ -1,63 +1,66 @@
-/*
-Copyright 2025.
-
-Licensed under the Apache License, Version 2.0 (the "License");
-you may not use this file except in compliance with the License.
-You may obtain a copy of the License at
-
-    http://www.apache.org/licenses/LICENSE-2.0
-
-Unless required by applicable law or agreed to in writing, software
-distributed under the License is distributed on an "AS IS" BASIS,
-WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-See the License for the specific language governing permissions and
-limitations under the License.
-*/
-
-package controller
+package controllers
 
 import (
 	"context"
 
+	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/client-go/tools/record"
+
+	infrav1 "github.com/latitudesh/cluster-api-provider-latitudesh/api/v1beta1"
+
+	"sigs.k8s.io/cluster-api/util/patch"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
-	logf "sigs.k8s.io/controller-runtime/pkg/log"
-
-	infrastructurev1beta1 "github.com/latitudesh/cluster-api-provider-latitudesh/api/v1beta1"
+	crlog "sigs.k8s.io/controller-runtime/pkg/log"
 )
-
-// LatitudeClusterReconciler reconciles a LatitudeCluster object
-type LatitudeClusterReconciler struct {
-	client.Client
-	Scheme *runtime.Scheme
-}
 
 // +kubebuilder:rbac:groups=infrastructure.cluster.x-k8s.io,resources=latitudeclusters,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=infrastructure.cluster.x-k8s.io,resources=latitudeclusters/status,verbs=get;update;patch
 // +kubebuilder:rbac:groups=infrastructure.cluster.x-k8s.io,resources=latitudeclusters/finalizers,verbs=update
+// +kubebuilder:rbac:groups="",resources=events,verbs=create;patch
 
-// Reconcile is part of the main kubernetes reconciliation loop which aims to
-// move the current state of the cluster closer to the desired state.
-// TODO(user): Modify the Reconcile function to compare the state specified by
-// the LatitudeCluster object against the actual cluster state, and then
-// perform operations to make the cluster state reflect the state specified by
-// the user.
-//
-// For more details, check Reconcile and its Result here:
-// - https://pkg.go.dev/sigs.k8s.io/controller-runtime@v0.21.0/pkg/reconcile
+type LatitudeClusterReconciler struct {
+	client.Client
+	Scheme   *runtime.Scheme
+	recorder record.EventRecorder
+}
+
 func (r *LatitudeClusterReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
-	_ = logf.FromContext(ctx)
+	log := crlog.FromContext(ctx).WithValues("latitudecluster", req.NamespacedName)
+	log.Info("reconcile start")
 
-	// TODO(user): your logic here
+	obj := &infrav1.LatitudeCluster{}
+	if err := r.Get(ctx, req.NamespacedName, obj); err != nil {
+		return ctrl.Result{}, client.IgnoreNotFound(err)
+	}
+	if !obj.ObjectMeta.DeletionTimestamp.IsZero() {
+		return ctrl.Result{}, nil
+	}
+	if obj.Status.Ready {
+		return ctrl.Result{}, nil
+	}
 
+	ph, err := patch.NewHelper(obj, r.Client)
+	if err != nil {
+		return ctrl.Result{}, err
+	}
+
+	// hello-world: apenas marca Ready (sem endpoint)
+	obj.Status.Ready = true
+	r.recorder.Eventf(obj, corev1.EventTypeNormal, "HelloWorld", "LatitudeCluster marked Ready")
+
+	if err := ph.Patch(ctx, obj); err != nil {
+		return ctrl.Result{}, err
+	}
+	log.Info("reconcile done")
 	return ctrl.Result{}, nil
 }
 
-// SetupWithManager sets up the controller with the Manager.
 func (r *LatitudeClusterReconciler) SetupWithManager(mgr ctrl.Manager) error {
+	r.recorder = mgr.GetEventRecorderFor("capl-latitudecluster")
 	return ctrl.NewControllerManagedBy(mgr).
-		For(&infrastructurev1beta1.LatitudeCluster{}).
-		Named("latitudecluster").
+		For(&infrav1.LatitudeCluster{}).
 		Complete(r)
 }
+
