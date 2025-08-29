@@ -3,6 +3,8 @@
 set -euo pipefail
 source "$(dirname "$0")/.env.dev"
 
+CAPL_NAMESPACE="${CAPL_NAMESPACE:-capl-system}"
+
 # kind
 if ! kind get clusters | grep -qx "$CLUSTER_NAME"; then
   cat > /tmp/kind-${CLUSTER_NAME}.yaml <<YAML
@@ -58,10 +60,10 @@ kubectl get crds | grep 'cluster\.x-k8s\.io'
 export IMG="ttl.sh/capl-$(date +%s):1h"
 
 docker build -t "$IMG" .
-kind load docker-image "$IMG" --name capl-dev || docker push "$IMG"
+kind load docker-image "$IMG" --name "$CLUSTER_NAME" || docker push "$IMG"
 
 docker tag "$IMG" capl-manager:dev
-kind load docker-image capl-manager:dev --name capl-dev
+kind load docker-image capl-manager:dev --name "$CLUSTER_NAME"
 
 echo "IMG=$IMG"
 
@@ -69,18 +71,34 @@ echo "IMG=$IMG"
 API_TOKEN="YOUR_API_TOKEN"
 BASE_URL="https://api.latitudesh.sh"
 
-kubectl -n capl-system create secret generic latitudesh-credentials \
+kubectl get ns "$CAPL_NAMESPACE" >/dev/null 2>&1 || kubectl create ns "$CAPL_NAMESPACE"
+
+kubectl -n ${CLUSTER_NAME} create secret generic latitudesh-credentials \
   --from-literal=API_TOKEN="${LATITUDE_BEARER:-dummy-token}" \
   --from-literal=BASE_URL="${LATITUDE_BASE_URL:-https://api.latitudesh.sh}" \
   --dry-run=client -o yaml | kubectl apply -f -
+
+# kustomize
+ensure_kustomize() {
+  if command -v kustomize >/dev/null 2>&1; then
+    return
+  fi
+  echo "! kustomize not found. installing..."
+  curl -s https://raw.githubusercontent.com/kubernetes-sigs/kustomize/master/hack/install_kustomize.sh | bash
+  mkdir -p "$HOME/bin"
+  mv kustomize "$HOME/bin/kustomize"
+  export PATH="$HOME/bin:$PATH"
+}
+
+ensure_kustomize
 
 # apply crds
 command -v make >/dev/null && { make generate || true; make manifests || true; }
 
 kustomize build config/crd | kubectl apply -f -
-( cd config/default && kustomize edit set image capl-manager:dev="$IMG" )
+( cd config/default && kustomize edit set namespace "$CAPL_NAMESPACE"; kustomize edit set image capl-manager:dev="$IMG" )
 kustomize build config/default | kubectl apply -f -
 
-kubectl -n capl-system rollout status deploy/capl-controller-manager --timeout=5m
-kubectl -n capl-system logs deploy/capl-controller-manager -c manager --tail=200
+kubectl -n ${CLUSTER_NAME} rollout status deploy/capl-controller-manager --timeout=5m
+kubectl -n ${CLUSTER_NAME} logs deploy/capl-controller-manager -c manager --tail=200
 
