@@ -1,0 +1,13 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: latitudesh-controller-manager     # <- must match EXACTLY
+  namespace: capl-system                  # <- must match EXACTLY
+spec:
+  template:
+    spec:
+      containers:
+        - name: manager                   # <- container name from manager.yaml
+          env:
+            - name: CAPL_HELLO
+              value: "true"

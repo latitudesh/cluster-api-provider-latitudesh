@@ -1,0 +1,12 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: latitudesh-controller-manager   # must match your deployment name
+  namespace: capl-system                # must match your namespace
+spec:
+  template:
+    spec:
+      tolerations:
+        - key: "dev"
+          operator: "Exists"
+          effect: "NoSchedule"
