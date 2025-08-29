@@ -6,11 +6,14 @@ source "$(dirname "$0")/.env.dev"
 CAPL_NAMESPACE="${CAPL_NAMESPACE:-capl-system}"
 
 # Detect architecture
-ARCH_RAW=$(uname -m)   # x86_64 | aarch64 | arm64
+ARCH_RAW=$(uname -m) # x86_64 | aarch64 | arm64
 case "$ARCH_RAW" in
-  x86_64|amd64) ARCH=amd64 ;;
-  arm64|aarch64) ARCH=arm64 ;;
-  *) echo "❌ Unsupported architecture: $ARCH_RAW"; exit 1 ;;
+x86_64 | amd64) ARCH=amd64 ;;
+arm64 | aarch64) ARCH=arm64 ;;
+*)
+  echo "❌ Unsupported architecture: $ARCH_RAW"
+  exit 1
+  ;;
 esac
 
 # Versions (can be overridden via env vars)
@@ -39,9 +42,27 @@ install_kubectl() {
   echo "✅ kubectl installed ($(kubectl version --client --short 2>/dev/null || true))"
 }
 
+add_docker_repo() {
+  sudo apt-get update
+  sudo apt-get install ca-certificates curl
+  sudo install -m 0755 -d /etc/apt/keyrings
+  sudo curl -fsSL https://download.docker.com/linux/ubuntu/gpg -o /etc/apt/keyrings/docker.asc
+  sudo chmod a+r /etc/apt/keyrings/docker.asc
+
+  echo \
+    "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/ubuntu \
+  $(. /etc/os-release && echo "${UBUNTU_CODENAME:-$VERSION_CODENAME}") stable" |
+    sudo tee /etc/apt/sources.list.d/docker.list >/dev/null
+  sudo apt-get update
+}
+
 install_docker() {
   if command -v docker &>/dev/null; then return; fi
   echo "⚠️ docker not found. Installing..."
+
+  add_docker_repo
+
+  sudo apt-get install docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
 
   sudo usermod -aG docker $USER
   sudo systemctl enable --now docker
@@ -53,9 +74,9 @@ install_docker() {
 install_clusterctl() {
   if command -v clusterctl &>/dev/null; then return; fi
   echo "⚠️ clusterctl not found. Installing..."
-  version=$(curl -fsSL https://api.github.com/repos/kubernetes-sigs/cluster-api/releases/latest \
-    | grep tag_name \
-    | cut -d '"' -f4)
+  version=$(curl -fsSL https://api.github.com/repos/kubernetes-sigs/cluster-api/releases/latest |
+    grep tag_name |
+    cut -d '"' -f4)
   url="https://github.com/kubernetes-sigs/cluster-api/releases/download/${version}/clusterctl-linux-${ARCH}"
   echo "→ $url"
   curl -fsSL "$url" -o clusterctl
@@ -72,7 +93,7 @@ install_docker
 
 # kind
 if ! kind get clusters | grep -qx "$CLUSTER_NAME"; then
-  cat > /tmp/kind-${CLUSTER_NAME}.yaml <<YAML
+  cat >/tmp/kind-${CLUSTER_NAME}.yaml <<YAML
 kind: Cluster
 apiVersion: kind.x-k8s.io/v1alpha4
 name: ${CLUSTER_NAME}
@@ -90,9 +111,9 @@ CTX="kind-${CLUSTER_NAME}"
 
 mkdir -p "$HOME/.kube"
 tmp="$(mktemp)"
-kind export kubeconfig --name "$CLUSTER_NAME" --kubeconfig "$tmp" || kind get kubeconfig --name "$CLUSTER_NAME" > "$tmp"
+kind export kubeconfig --name "$CLUSTER_NAME" --kubeconfig "$tmp" || kind get kubeconfig --name "$CLUSTER_NAME" >"$tmp"
 if [[ -f "$HOME/.kube/config" ]]; then
-  KUBECONFIG="$HOME/.kube/config:$tmp" kubectl config view --flatten > "$HOME/.kube/config.merged"
+  KUBECONFIG="$HOME/.kube/config:$tmp" kubectl config view --flatten >"$HOME/.kube/config.merged"
   mv "$HOME/.kube/config.merged" "$HOME/.kube/config"
 else
   mv "$tmp" "$HOME/.kube/config"
@@ -107,8 +128,8 @@ kubectl -n kube-system get pods
 #CERT_MANAGER_FILE="$(dirname "$0")/../hack/cert-manager.crds.yaml"
 CERT_MANAGER_FILE="cert-manager.crds.yaml"
 curl -L \
-	https://github.com/cert-manager/cert-manager/releases/download/v1.18.2/cert-manager.yaml \
-	-o "$CERT_MANAGER_FILE"
+  https://github.com/cert-manager/cert-manager/releases/download/v1.18.2/cert-manager.yaml \
+  -o "$CERT_MANAGER_FILE"
 
 kubectl apply -f "$CERT_MANAGER_FILE"
 kubectl -n cert-manager rollout status deploy/cert-manager --timeout=4m
@@ -158,12 +179,17 @@ ensure_kustomize() {
 ensure_kustomize
 
 # apply crds
-command -v make >/dev/null && { make generate || true; make manifests || true; }
+command -v make >/dev/null && {
+  make generate || true
+  make manifests || true
+}
 
 kustomize build config/crd | kubectl apply -f -
-( cd config/default && kustomize edit set namespace "$CAPL_NAMESPACE"; kustomize edit set image capl-manager:dev="$IMG" )
+(
+  cd config/default && kustomize edit set namespace "$CAPL_NAMESPACE"
+  kustomize edit set image capl-manager:dev="$IMG"
+)
 kustomize build config/default | kubectl apply -f -
 
 kubectl -n ${CAPL_NAMESPACE} rollout status deploy/capl-controller-manager --timeout=5m
 kubectl -n ${CAPL_NAMESPACE} logs deploy/capl-controller-manager -c manager --tail=200
-
