@@ -46,7 +46,6 @@ spec:
                   spec:
                     properties:
                       operatingSystem:
-                        description: Exemplo de campos obrigatórios do “hello world”
                         minLength: 1
                         type: string
                       plan:

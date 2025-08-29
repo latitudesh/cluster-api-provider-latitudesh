@@ -40,7 +40,6 @@ spec:
           spec:
             properties:
               location:
-                description: string (não objeto)
                 type: string
               projectRef:
                 properties:
@@ -51,8 +50,7 @@ spec:
           status:
             properties:
               controlPlaneEndpoint:
-                description: APIEndpoint local (MVP) para evitar depender do cluster-api
-                  agora
+                description: APIEndpoint local (MVP)
                 properties:
                   host:
                     type: string

@@ -47,7 +47,6 @@ spec:
           spec:
             properties:
               operatingSystem:
-                description: Exemplo de campos obrigatórios do “hello world”
                 minLength: 1
                 type: string
               plan:
@@ -116,10 +115,8 @@ spec:
                   type: object
                 type: array
               providerID:
-                description: ProviderID fake para o Machine controller copiar no futuro
                 type: string
               ready:
-                description: Marcamos como pronto no hello world
                 type: boolean
             type: object
         type: object
