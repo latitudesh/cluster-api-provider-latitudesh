@@ -5,10 +5,6 @@ source "$(dirname "$0")/.env.dev"
 
 CAPL_NAMESPACE="${CAPL_NAMESPACE:-capl-system}"
 
-#!/usr/bin/env bash
-set -euo pipefail
-source "$(dirname "$0")/.env.dev"
-
 # Detect architecture
 ARCH_RAW=$(uname -m)   # x86_64 | aarch64 | arm64
 case "$ARCH_RAW" in
@@ -140,9 +136,9 @@ echo "IMG=$IMG"
 API_TOKEN="YOUR_API_TOKEN"
 BASE_URL="https://api.latitudesh.sh"
 
-kubectl get ns "$CAPL_NAMESPACE" >/dev/null 2>&1 || kubectl create ns "$CAPL_NAMESPACE"
+kubectl get ns ${CAPL_NAMESPACE} >/dev/null 2>&1 || kubectl create ns ${CAPL_NAMESPACE}
 
-kubectl -n ${CLUSTER_NAME} create secret generic latitudesh-credentials \
+kubectl -n ${CAPL_NAMESPACE} create secret generic latitudesh-credentials \
   --from-literal=API_TOKEN="${LATITUDE_BEARER:-dummy-token}" \
   --from-literal=BASE_URL="${LATITUDE_BASE_URL:-https://api.latitudesh.sh}" \
   --dry-run=client -o yaml | kubectl apply -f -
@@ -168,6 +164,6 @@ kustomize build config/crd | kubectl apply -f -
 ( cd config/default && kustomize edit set namespace "$CAPL_NAMESPACE"; kustomize edit set image capl-manager:dev="$IMG" )
 kustomize build config/default | kubectl apply -f -
 
-kubectl -n ${CLUSTER_NAME} rollout status deploy/capl-controller-manager --timeout=5m
-kubectl -n ${CLUSTER_NAME} logs deploy/capl-controller-manager -c manager --tail=200
+kubectl -n ${CAPL_NAMESPACE} rollout status deploy/capl-controller-manager --timeout=5m
+kubectl -n ${CAPL_NAMESPACE} logs deploy/capl-controller-manager -c manager --tail=200
 
