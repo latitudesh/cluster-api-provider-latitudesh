@@ -5,6 +5,75 @@ source "$(dirname "$0")/.env.dev"
 
 CAPL_NAMESPACE="${CAPL_NAMESPACE:-capl-system}"
 
+#!/usr/bin/env bash
+set -euo pipefail
+source "$(dirname "$0")/.env.dev"
+
+# Detect architecture
+ARCH_RAW=$(uname -m)   # x86_64 | aarch64 | arm64
+case "$ARCH_RAW" in
+  x86_64|amd64) ARCH=amd64 ;;
+  arm64|aarch64) ARCH=arm64 ;;
+  *) echo "❌ Unsupported architecture: $ARCH_RAW"; exit 1 ;;
+esac
+
+# Versions (can be overridden via env vars)
+KIND_VERSION="${KIND_VERSION:-v0.23.0}"
+KUBECTL_VERSION="${KUBECTL_VERSION:-$(curl -fsSL https://dl.k8s.io/release/stable.txt)}"
+
+install_kind() {
+  if command -v kind &>/dev/null; then return; fi
+  echo "⚠️ kind not found. Installing..."
+  url="https://kind.sigs.k8s.io/dl/${KIND_VERSION}/kind-linux-${ARCH}"
+  echo "→ $url"
+  curl -fsSL "$url" -o kind
+  chmod +x kind
+  sudo mv kind /usr/local/bin/kind
+  echo "✅ kind installed ($(kind version | tr -d '\n'))"
+}
+
+install_kubectl() {
+  if command -v kubectl &>/dev/null; then return; fi
+  echo "⚠️ kubectl not found. Installing..."
+  url="https://dl.k8s.io/release/${KUBECTL_VERSION}/bin/linux/${ARCH}/kubectl"
+  echo "→ $url"
+  curl -fsSL "$url" -o kubectl
+  chmod +x kubectl
+  sudo mv kubectl /usr/local/bin/kubectl
+  echo "✅ kubectl installed ($(kubectl version --client --short 2>/dev/null || true))"
+}
+
+install_docker() {
+  if command -v docker &>/dev/null; then return; fi
+  echo "⚠️ docker not found. Installing..."
+
+  sudo usermod -aG docker $USER
+  sudo systemctl enable --now docker
+  newgrp docker
+
+  echo "✅ docker installed."
+}
+
+install_clusterctl() {
+  if command -v clusterctl &>/dev/null; then return; fi
+  echo "⚠️ clusterctl not found. Installing..."
+  version=$(curl -fsSL https://api.github.com/repos/kubernetes-sigs/cluster-api/releases/latest \
+    | grep tag_name \
+    | cut -d '"' -f4)
+  url="https://github.com/kubernetes-sigs/cluster-api/releases/download/${version}/clusterctl-linux-${ARCH}"
+  echo "→ $url"
+  curl -fsSL "$url" -o clusterctl
+  chmod +x clusterctl
+  sudo mv clusterctl /usr/local/bin/clusterctl
+  echo "✅ clusterctl installed ($(clusterctl version | head -n1))"
+}
+
+# install dependencies if missing
+install_kind
+install_kubectl
+install_clusterctl
+install_docker
+
 # kind
 if ! kind get clusters | grep -qx "$CLUSTER_NAME"; then
   cat > /tmp/kind-${CLUSTER_NAME}.yaml <<YAML
