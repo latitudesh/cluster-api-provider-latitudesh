@@ -57,18 +57,14 @@ add_docker_repo() {
 }
 
 install_docker() {
-  if command -v docker &>/dev/null; then return; fi
-  echo "⚠️ docker not found. Installing..."
+  if command -v docker &>/dev/null; then
+    return
+  fi
 
-  add_docker_repo
-
-  sudo apt-get install docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
-
-  sudo usermod -aG docker $USER
-  sudo systemctl enable --now docker
-  newgrp docker
-
-  echo "✅ docker installed."
+  echo "❌ Docker was not found on your machine."
+  echo "➡️ Please install Docker manually before continuing:"
+  echo "   https://docs.docker.com/engine/install/ubuntu/"
+  exit 1
 }
 
 install_clusterctl() {
