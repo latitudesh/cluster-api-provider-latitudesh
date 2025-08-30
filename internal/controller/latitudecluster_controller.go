@@ -8,6 +8,7 @@ import (
 	"k8s.io/client-go/tools/record"
 
 	infrav1 "github.com/latitudesh/cluster-api-provider-latitudesh/api/v1beta1"
+	"github.com/latitudesh/cluster-api-provider-latitudesh/internal/latitude"
 
 	"sigs.k8s.io/cluster-api/util/patch"
 	ctrl "sigs.k8s.io/controller-runtime"
@@ -22,8 +23,9 @@ import (
 
 type LatitudeClusterReconciler struct {
 	client.Client
-	Scheme   *runtime.Scheme
-	recorder record.EventRecorder
+	Scheme         *runtime.Scheme
+	LatitudeClient *latitude.Client
+	recorder       record.EventRecorder
 }
 
 func (r *LatitudeClusterReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
