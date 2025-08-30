@@ -40,6 +40,7 @@ func NewClient() (*Client, error) {
 
 	sdk := latitudeshsdk.New(
 		latitudeshsdk.WithSecurity(apiKey),
+		latitudeshsdk.WithTimeout(60*time.Second),
 	)
 
 	return &Client{
@@ -48,6 +49,11 @@ func NewClient() (*Client, error) {
 }
 
 func (c *Client) CreateServer(ctx context.Context, spec ServerSpec) (*Server, error) {
+	// Validate server spec
+	if err := c.validateServerSpec(spec); err != nil {
+		return nil, fmt.Errorf("invalid server spec: %w", err)
+	}
+
 	// Build create request according to Latitude.sh API spec
 	attrs := &operations.CreateServerServersAttributes{
 		Project:         &spec.Project,
@@ -199,4 +205,20 @@ func (c *Client) GetAvailableRegions(ctx context.Context) ([]string, error) {
 	}
 
 	return regions, nil
+}
+
+func (c *Client) validateServerSpec(spec ServerSpec) error {
+	if spec.Project == "" {
+		return fmt.Errorf("project is required")
+	}
+	if spec.Plan == "" {
+		return fmt.Errorf("plan is required")
+	}
+	if spec.OperatingSystem == "" {
+		return fmt.Errorf("operatingSystem is required")
+	}
+	if spec.Site == "" {
+		return fmt.Errorf("site is required")
+	}
+	return nil
 }

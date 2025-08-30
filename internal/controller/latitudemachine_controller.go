@@ -94,9 +94,9 @@ func (r *LatitudeMachineReconciler) reconcileNormal(ctx context.Context, latitud
 	}
 
 	// Check if we have required fields
-	if latitudeMachine.Spec.OperatingSystem == "" || latitudeMachine.Spec.Plan == "" {
-		log.Info("Missing required fields: operatingSystem or plan")
-		r.setCondition(latitudeMachine, infrav1.InstanceReadyCondition, metav1.ConditionFalse, infrav1.InstanceProvisionFailedReason, "Missing required fields")
+	if err := r.validateMachineSpec(latitudeMachine); err != nil {
+		log.Info("Invalid machine spec", "error", err)
+		r.setCondition(latitudeMachine, infrav1.InstanceReadyCondition, metav1.ConditionFalse, infrav1.InstanceProvisionFailedReason, err.Error())
 		return ctrl.Result{}, nil
 	}
 
@@ -164,6 +164,13 @@ func (r *LatitudeMachineReconciler) reconcileDelete(ctx context.Context, latitud
 func (r *LatitudeMachineReconciler) reconcileServer(ctx context.Context, latitudeMachine *infrav1.LatitudeMachine) (*latitude.Server, error) {
 	log := crlog.FromContext(ctx)
 
+	// metrics for reconcile server
+	start := time.Now()
+	defer func() {
+		duration := time.Since(start)
+		log.Info("Reconcile server duration", "duration", duration)
+	}()
+
 	// If server already exists, check its status
 	if latitudeMachine.Status.ServerID != "" {
 		server, err := r.LatitudeClient.GetServer(ctx, latitudeMachine.Status.ServerID)
@@ -198,7 +205,7 @@ func (r *LatitudeMachineReconciler) reconcileServer(ctx context.Context, latitud
 	}
 
 	latitudeMachine.Status.ServerID = server.ID
-	log.Info("Created server", "serverID", server.ID)
+	log.Info("Created server", "serverID", server.ID, "duration", time.Since(start))
 
 	// Wait for server to be ready
 	readyServer, err := r.LatitudeClient.WaitForServer(ctx, server.ID, "active", 10*time.Minute)
@@ -207,6 +214,28 @@ func (r *LatitudeMachineReconciler) reconcileServer(ctx context.Context, latitud
 	}
 
 	return readyServer, nil
+}
+
+func (r *LatitudeMachineReconciler) validateMachineSpec(latitudeMachine *infrav1.LatitudeMachine) error {
+	var errors []string
+
+	if latitudeMachine.Spec.OperatingSystem == "" {
+		errors = append(errors, "operatingSystem is required")
+	}
+	if latitudeMachine.Spec.Plan == "" {
+		errors = append(errors, "plan is required")
+	}
+	if r.getProjectID(latitudeMachine) == "" {
+		errors = append(errors, "projectID is required")
+	}
+	if r.getSite(latitudeMachine) == "" {
+		errors = append(errors, "site is required")
+	}
+
+	if len(errors) > 0 {
+		return fmt.Errorf("validation failed: %s", strings.Join(errors, ", "))
+	}
+	return nil
 }
 
 func (r *LatitudeMachineReconciler) getProjectID(latitudeMachine *infrav1.LatitudeMachine) string {
