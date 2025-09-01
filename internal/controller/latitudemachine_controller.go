@@ -62,13 +62,18 @@ func (r *LatitudeMachineReconciler) Reconcile(ctx context.Context, req ctrl.Requ
 
 	// Always attempt to Patch the LatitudeMachine object and status after each reconciliation
 	defer func() {
-		if err := patchHelper.Patch(ctx, latitudeMachine); err != nil {
+		if err := patchHelper.Patch(ctx, latitudeMachine, patch.WithStatusObservedGeneration{}); err != nil {
 			log.Error(err, "failed to patch LatitudeMachine")
 			if reterr == nil {
 				reterr = err
 			}
 		}
 	}()
+
+	if _, paused := latitudeMachine.Annotations["cluster.x-k8s.io/paused"]; paused {
+		log.Info("resource is paused; skipping")
+		return ctrl.Result{}, nil
+	}
 
 	// Handle deleted machines
 	if !latitudeMachine.ObjectMeta.DeletionTimestamp.IsZero() {
@@ -180,7 +185,9 @@ func (r *LatitudeMachineReconciler) reconcileServer(ctx context.Context, latitud
 			latitudeMachine.Status.ServerID = ""
 		} else {
 			// Check if server is ready
-			if strings.EqualFold(server.Status, "active") || strings.EqualFold(server.Status, "running") {
+			if strings.EqualFold(server.Status, "on") ||
+				strings.EqualFold(server.Status, "active") ||
+				strings.EqualFold(server.Status, "running") {
 				return server, nil
 			}
 			// Server exists but not ready yet
@@ -208,12 +215,12 @@ func (r *LatitudeMachineReconciler) reconcileServer(ctx context.Context, latitud
 	log.Info("Created server", "serverID", server.ID, "duration", time.Since(start))
 
 	// Wait for server to be ready
-	readyServer, err := r.LatitudeClient.WaitForServer(ctx, server.ID, "active", 10*time.Minute)
-	if err != nil {
-		return nil, fmt.Errorf("server creation timed out: %w", err)
-	}
+	// readyServer, err := r.LatitudeClient.WaitForServer(ctx, server.ID, "active", 10*time.Minute)
+	// if err != nil {
+	// 	return nil, fmt.Errorf("server creation timed out: %w", err)
+	// }
 
-	return readyServer, nil
+	return nil, nil
 }
 
 func (r *LatitudeMachineReconciler) validateMachineSpec(latitudeMachine *infrav1.LatitudeMachine) error {
