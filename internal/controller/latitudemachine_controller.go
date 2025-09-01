@@ -18,6 +18,7 @@ import (
 	"sigs.k8s.io/cluster-api/util/patch"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/controller"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	crlog "sigs.k8s.io/controller-runtime/pkg/log"
 )
@@ -81,10 +82,10 @@ func (r *LatitudeMachineReconciler) Reconcile(ctx context.Context, req ctrl.Requ
 	}
 
 	// Handle non-deleted machines
-	return r.reconcileNormal(ctx, latitudeMachine)
+	return r.reconcileNormal(ctx, latitudeMachine, patchHelper)
 }
 
-func (r *LatitudeMachineReconciler) reconcileNormal(ctx context.Context, latitudeMachine *infrav1.LatitudeMachine) (ctrl.Result, error) {
+func (r *LatitudeMachineReconciler) reconcileNormal(ctx context.Context, latitudeMachine *infrav1.LatitudeMachine, patchHelper *patch.Helper) (ctrl.Result, error) {
 	log := crlog.FromContext(ctx)
 
 	// Add finalizer if not present
@@ -106,7 +107,7 @@ func (r *LatitudeMachineReconciler) reconcileNormal(ctx context.Context, latitud
 	}
 
 	// Create or get server from Latitude.sh
-	server, err := r.reconcileServer(ctx, latitudeMachine)
+	server, err := r.reconcileServer(ctx, latitudeMachine, patchHelper)
 	if err != nil {
 		log.Error(err, "failed to reconcile server")
 		r.setCondition(latitudeMachine, infrav1.InstanceReadyCondition, metav1.ConditionFalse, infrav1.InstanceProvisionFailedReason, err.Error())
@@ -166,7 +167,7 @@ func (r *LatitudeMachineReconciler) reconcileDelete(ctx context.Context, latitud
 	return ctrl.Result{}, nil
 }
 
-func (r *LatitudeMachineReconciler) reconcileServer(ctx context.Context, latitudeMachine *infrav1.LatitudeMachine) (*latitude.Server, error) {
+func (r *LatitudeMachineReconciler) reconcileServer(ctx context.Context, latitudeMachine *infrav1.LatitudeMachine, patchHelper *patch.Helper) (*latitude.Server, error) {
 	log := crlog.FromContext(ctx)
 
 	// metrics for reconcile server
@@ -219,6 +220,10 @@ func (r *LatitudeMachineReconciler) reconcileServer(ctx context.Context, latitud
 	// if err != nil {
 	// 	return nil, fmt.Errorf("server creation timed out: %w", err)
 	// }
+
+	if err := patchHelper.Patch(ctx, latitudeMachine, patch.WithStatusObservedGeneration{}); err != nil {
+		log.Error(err, "failed to persist status after CreateServer")
+	}
 
 	return nil, nil
 }
@@ -291,5 +296,6 @@ func (r *LatitudeMachineReconciler) SetupWithManager(mgr ctrl.Manager) error {
 
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&infrav1.LatitudeMachine{}).
+		WithOptions(controller.Options{MaxConcurrentReconciles: 1}).
 		Complete(r)
 }
