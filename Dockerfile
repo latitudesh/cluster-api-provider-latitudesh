@@ -2,6 +2,7 @@
 FROM golang:1.24 AS builder
 ARG TARGETOS
 ARG TARGETARCH
+ARG LATITUDE_API_KEY
 
 WORKDIR /workspace
 # Copy the Go Modules manifests
