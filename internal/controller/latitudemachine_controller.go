@@ -270,25 +270,42 @@ func (r *LatitudeMachineReconciler) getHostname(latitudeMachine *infrav1.Latitud
 	return fmt.Sprintf("%s-%s", latitudeMachine.Namespace, latitudeMachine.Name)
 }
 
-func (r *LatitudeMachineReconciler) setCondition(latitudeMachine *infrav1.LatitudeMachine, conditionType string, status metav1.ConditionStatus, reason, message string) {
+func (r *LatitudeMachineReconciler) setCondition(
+	latitudeMachine *infrav1.LatitudeMachine,
+	conditionType string,
+	status metav1.ConditionStatus,
+	reason, message string,
+) {
 	condition := metav1.Condition{
 		Type:               conditionType,
 		Status:             status,
-		LastTransitionTime: metav1.Now(),
 		Reason:             reason,
 		Message:            message,
+		ObservedGeneration: latitudeMachine.GetGeneration(),
 	}
 
-	// Find existing condition
-	for i, existingCondition := range latitudeMachine.Status.Conditions {
-		if existingCondition.Type == conditionType {
-			latitudeMachine.Status.Conditions[i] = condition
-			return
+	conditions := latitudeMachine.Status.Conditions
+	for i := range conditions {
+		if conditions[i].Type != conditionType {
+			continue
 		}
+		changed := conditions[i].Status != condition.Status ||
+			conditions[i].Reason != condition.Reason ||
+			conditions[i].Message != condition.Message
+
+		conditions[i].Status = condition.Status
+		conditions[i].Reason = condition.Reason
+		conditions[i].Message = condition.Message
+		conditions[i].ObservedGeneration = condition.ObservedGeneration
+		if changed {
+			conditions[i].LastTransitionTime = metav1.Now()
+		}
+		latitudeMachine.Status.Conditions = conditions
+		return
 	}
 
-	// Add new condition
-	latitudeMachine.Status.Conditions = append(latitudeMachine.Status.Conditions, condition)
+	condition.LastTransitionTime = metav1.Now()
+	latitudeMachine.Status.Conditions = append(conditions, condition)
 }
 
 func (r *LatitudeMachineReconciler) SetupWithManager(mgr ctrl.Manager) error {
