@@ -2,15 +2,22 @@
 
 set -euo pipefail
 
-cat >/tmp/lat-machine-smoke.yaml <<'YAML'
+cat > /tmp/lat-machine-smoke.yaml <<'YAML'
 apiVersion: infrastructure.cluster.x-k8s.io/v1beta1
 kind: LatitudeMachine
 metadata:
   name: hello-1
   namespace: default
 spec:
-  plan: c2-small-x86
-  operatingSystem: ubuntu-24.04
+  plan: "c2-small-x86"
+  operatingSystem: "ubuntu-24.04"
+  projectID: "project-id"
+  site: "ASH" 
+  sshKeys:
+    - "sua-ssh-key-id"
+  userData: |
+    #!/bin/bash
+    echo "Hello from Latitude.sh!" > /tmp/hello.txt
 YAML
 
 kubectl apply -f /tmp/lat-machine-smoke.yaml

@@ -3,16 +3,23 @@ package controllers
 import (
 	"context"
 	"fmt"
+	"strings"
+	"time"
 
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/client-go/tools/record"
 
 	infrav1 "github.com/latitudesh/cluster-api-provider-latitudesh/api/v1beta1"
+	"github.com/latitudesh/cluster-api-provider-latitudesh/internal/latitude"
 
 	"sigs.k8s.io/cluster-api/util/patch"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/controller"
+	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	crlog "sigs.k8s.io/controller-runtime/pkg/log"
 )
 
@@ -20,64 +27,292 @@ import (
 // +kubebuilder:rbac:groups=infrastructure.cluster.x-k8s.io,resources=latitudemachines,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=infrastructure.cluster.x-k8s.io,resources=latitudemachines/status,verbs=get;update;patch
 // +kubebuilder:rbac:groups=infrastructure.cluster.x-k8s.io,resources=latitudemachines/finalizers,verbs=update
-// Eventos
 // +kubebuilder:rbac:groups="",resources=events,verbs=create;patch
+// +kubebuilder:rbac:groups="",resources=secrets,verbs=get;list;watch
+
+const (
+	LatitudeFinalizerName = "latitudemachine.infrastructure.cluster.x-k8s.io"
+)
 
 type LatitudeMachineReconciler struct {
 	client.Client
-	Scheme   *runtime.Scheme
-	recorder record.EventRecorder
+	Scheme         *runtime.Scheme
+	recorder       record.EventRecorder
+	LatitudeClient *latitude.Client
 }
 
-func (r *LatitudeMachineReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
+func (r *LatitudeMachineReconciler) Reconcile(ctx context.Context, req ctrl.Request) (_ ctrl.Result, reterr error) {
 	log := crlog.FromContext(ctx).WithValues("latitudemachine", req.NamespacedName)
 	log.Info("reconcile start")
 
-	// Carrega o objeto
-	lm := &infrav1.LatitudeMachine{}
-	if err := r.Get(ctx, req.NamespacedName, lm); err != nil {
-		return ctrl.Result{}, client.IgnoreNotFound(err)
+	// Buscar LatitudeMachine
+	latitudeMachine := &infrav1.LatitudeMachine{}
+	err := r.Get(ctx, req.NamespacedName, latitudeMachine)
+	if err != nil {
+		if apierrors.IsNotFound(err) {
+			return ctrl.Result{}, nil
+		}
+		return ctrl.Result{}, err
 	}
 
-	// Se está deletando, nada a fazer no hello-world
-	if !lm.DeletionTimestamp.IsZero() {
-		return ctrl.Result{}, nil
-	}
-
-	// Se já está pronto, não faz nada
-	if lm.Status.Ready {
-		return ctrl.Result{}, nil
-	}
-
-	// Patch helper para atualizar status de forma segura
-	ph, err := patch.NewHelper(lm, r.Client)
+	// Initialize the patch helper
+	patchHelper, err := patch.NewHelper(latitudeMachine, r.Client)
 	if err != nil {
 		return ctrl.Result{}, err
 	}
 
-	// Hello world: define um ProviderID fake e marca Ready
-	pid := fmt.Sprintf("latitude:///hello-%s", lm.Name)
-	lm.Status.ProviderID = pid // <- field string
-	lm.Status.Ready = true
+	// Always attempt to Patch the LatitudeMachine object and status after each reconciliation
+	defer func() {
+		if err := patchHelper.Patch(ctx, latitudeMachine, patch.WithStatusObservedGeneration{}); err != nil {
+			log.Error(err, "failed to patch LatitudeMachine")
+			if reterr == nil {
+				reterr = err
+			}
+		}
+	}()
 
-	// Evento
-	if r.recorder != nil {
-		r.recorder.Eventf(lm, corev1.EventTypeNormal, "HelloWorld",
-			"Assigned fake ProviderID %q and marked Ready", pid)
+	if _, paused := latitudeMachine.Annotations["cluster.x-k8s.io/paused"]; paused {
+		log.Info("resource is paused; skipping")
+		return ctrl.Result{}, nil
 	}
 
-	// Aplica patch
-	if err := ph.Patch(ctx, lm); err != nil {
+	// Handle deleted machines
+	if !latitudeMachine.ObjectMeta.DeletionTimestamp.IsZero() {
+		return r.reconcileDelete(ctx, latitudeMachine)
+	}
+
+	// Handle non-deleted machines
+	return r.reconcileNormal(ctx, latitudeMachine, patchHelper)
+}
+
+func (r *LatitudeMachineReconciler) reconcileNormal(ctx context.Context, latitudeMachine *infrav1.LatitudeMachine, patchHelper *patch.Helper) (ctrl.Result, error) {
+	log := crlog.FromContext(ctx)
+
+	// Add finalizer if not present
+	if !controllerutil.ContainsFinalizer(latitudeMachine, LatitudeFinalizerName) {
+		controllerutil.AddFinalizer(latitudeMachine, LatitudeFinalizerName)
+		return ctrl.Result{}, nil
+	}
+
+	// If already ready, do nothing
+	if latitudeMachine.Status.Ready {
+		return ctrl.Result{}, nil
+	}
+
+	// Check if we have required fields
+	if err := r.validateMachineSpec(latitudeMachine); err != nil {
+		log.Info("Invalid machine spec", "error", err)
+		r.setCondition(latitudeMachine, infrav1.InstanceReadyCondition, metav1.ConditionFalse, infrav1.InstanceProvisionFailedReason, err.Error())
+		return ctrl.Result{}, nil
+	}
+
+	// Create or get server from Latitude.sh
+	server, err := r.reconcileServer(ctx, latitudeMachine, patchHelper)
+	if err != nil {
+		log.Error(err, "failed to reconcile server")
+		r.setCondition(latitudeMachine, infrav1.InstanceReadyCondition, metav1.ConditionFalse, infrav1.InstanceProvisionFailedReason, err.Error())
+		r.recorder.Eventf(latitudeMachine, corev1.EventTypeWarning, "FailedCreate", "Failed to create server: %v", err)
 		return ctrl.Result{}, err
 	}
 
-	log.Info("reconcile done", "providerID", pid)
+	if server == nil {
+		log.Info("Server not ready yet")
+		r.setCondition(latitudeMachine, infrav1.InstanceReadyCondition, metav1.ConditionFalse, infrav1.InstanceNotReadyReason, "Server is being provisioned")
+		return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
+	}
+
+	// Update machine status
+	latitudeMachine.Status.Ready = true
+	latitudeMachine.Status.ProviderID = fmt.Sprintf("latitude://%s", server.ID)
+	latitudeMachine.Status.ServerID = server.ID
+
+	// Set addresses if available
+	addresses := []infrav1.MachineAddress{}
+	for _, ip := range server.IPAddress {
+		addresses = append(addresses, infrav1.MachineAddress{
+			Type:    "ExternalIP",
+			Address: ip,
+		})
+	}
+	latitudeMachine.Status.Addresses = addresses
+
+	// Set instance ready condition
+	r.setCondition(latitudeMachine, infrav1.InstanceReadyCondition, metav1.ConditionTrue, "InstanceReady", "Instance is ready")
+
+	r.recorder.Eventf(latitudeMachine, corev1.EventTypeNormal, "SuccessfulCreate", "Created server %s", server.ID)
+	log.Info("Successfully reconciled LatitudeMachine", "serverID", server.ID)
+
 	return ctrl.Result{}, nil
+}
+
+func (r *LatitudeMachineReconciler) reconcileDelete(ctx context.Context, latitudeMachine *infrav1.LatitudeMachine) (ctrl.Result, error) {
+	log := crlog.FromContext(ctx)
+
+	if latitudeMachine.Status.ServerID != "" {
+		// Delete server from Latitude.sh
+		err := r.LatitudeClient.DeleteServer(ctx, latitudeMachine.Status.ServerID)
+		if err != nil {
+			log.Error(err, "failed to delete server", "serverID", latitudeMachine.Status.ServerID)
+			r.setCondition(latitudeMachine, infrav1.InstanceReadyCondition, metav1.ConditionFalse, infrav1.InstanceDeletionFailedReason, err.Error())
+			r.recorder.Eventf(latitudeMachine, corev1.EventTypeWarning, "FailedDelete", "Failed to delete server %s: %v", latitudeMachine.Status.ServerID, err)
+			return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
+		}
+		r.recorder.Eventf(latitudeMachine, corev1.EventTypeNormal, "SuccessfulDelete", "Deleted server %s", latitudeMachine.Status.ServerID)
+	}
+
+	// Remove finalizer
+	controllerutil.RemoveFinalizer(latitudeMachine, LatitudeFinalizerName)
+	log.Info("Successfully deleted LatitudeMachine")
+
+	return ctrl.Result{}, nil
+}
+
+func (r *LatitudeMachineReconciler) reconcileServer(ctx context.Context, latitudeMachine *infrav1.LatitudeMachine, patchHelper *patch.Helper) (*latitude.Server, error) {
+	log := crlog.FromContext(ctx)
+
+	// metrics for reconcile server
+	start := time.Now()
+	defer func() {
+		duration := time.Since(start)
+		log.Info("Reconcile server duration", "duration", duration)
+	}()
+
+	// If server already exists, check its status
+	if latitudeMachine.Status.ServerID != "" {
+		server, err := r.LatitudeClient.GetServer(ctx, latitudeMachine.Status.ServerID)
+		if err != nil {
+			// Server might have been deleted externally
+			log.Info("Server not found, will create new one", "serverID", latitudeMachine.Status.ServerID)
+			latitudeMachine.Status.ServerID = ""
+		} else {
+			// Check if server is ready
+			if strings.EqualFold(server.Status, "on") ||
+				strings.EqualFold(server.Status, "active") ||
+				strings.EqualFold(server.Status, "running") {
+				return server, nil
+			}
+			// Server exists but not ready yet
+			return nil, nil
+		}
+	}
+
+	// Create new server
+	spec := latitude.ServerSpec{
+		Project:         r.getProjectID(latitudeMachine),
+		Plan:            latitudeMachine.Spec.Plan,
+		OperatingSystem: latitudeMachine.Spec.OperatingSystem,
+		Site:            r.getSite(latitudeMachine),
+		Hostname:        r.getHostname(latitudeMachine),
+		SSHKeys:         latitudeMachine.Spec.SSHKeys,
+		UserData:        latitudeMachine.Spec.UserData,
+	}
+
+	server, err := r.LatitudeClient.CreateServer(ctx, spec)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create server: %w", err)
+	}
+
+	latitudeMachine.Status.ServerID = server.ID
+	log.Info("Created server", "serverID", server.ID, "duration", time.Since(start))
+
+	// Wait for server to be ready
+	// readyServer, err := r.LatitudeClient.WaitForServer(ctx, server.ID, "active", 10*time.Minute)
+	// if err != nil {
+	// 	return nil, fmt.Errorf("server creation timed out: %w", err)
+	// }
+
+	if err := patchHelper.Patch(ctx, latitudeMachine, patch.WithStatusObservedGeneration{}); err != nil {
+		log.Error(err, "failed to persist status after CreateServer")
+	}
+
+	return nil, nil
+}
+
+func (r *LatitudeMachineReconciler) validateMachineSpec(latitudeMachine *infrav1.LatitudeMachine) error {
+	var errors []string
+
+	if latitudeMachine.Spec.OperatingSystem == "" {
+		errors = append(errors, "operatingSystem is required")
+	}
+	if latitudeMachine.Spec.Plan == "" {
+		errors = append(errors, "plan is required")
+	}
+	if r.getProjectID(latitudeMachine) == "" {
+		errors = append(errors, "projectID is required")
+	}
+	if r.getSite(latitudeMachine) == "" {
+		errors = append(errors, "site is required")
+	}
+
+	if len(errors) > 0 {
+		return fmt.Errorf("validation failed: %s", strings.Join(errors, ", "))
+	}
+	return nil
+}
+
+func (r *LatitudeMachineReconciler) getProjectID(latitudeMachine *infrav1.LatitudeMachine) string {
+	if latitudeMachine.Spec.ProjectID != "" {
+		return latitudeMachine.Spec.ProjectID
+	}
+	// TODO: Get from LatitudeCluster if available
+	return ""
+}
+
+func (r *LatitudeMachineReconciler) getSite(latitudeMachine *infrav1.LatitudeMachine) string {
+	if latitudeMachine.Spec.Site != "" {
+		return latitudeMachine.Spec.Site
+	}
+	// TODO: Get from LatitudeCluster if available
+	return ""
+}
+
+func (r *LatitudeMachineReconciler) getHostname(latitudeMachine *infrav1.LatitudeMachine) string {
+	return fmt.Sprintf("%s-%s", latitudeMachine.Namespace, latitudeMachine.Name)
+}
+
+func (r *LatitudeMachineReconciler) setCondition(
+	latitudeMachine *infrav1.LatitudeMachine,
+	conditionType string,
+	status metav1.ConditionStatus,
+	reason, message string,
+) {
+	condition := metav1.Condition{
+		Type:               conditionType,
+		Status:             status,
+		Reason:             reason,
+		Message:            message,
+		ObservedGeneration: latitudeMachine.GetGeneration(),
+	}
+
+	conditions := latitudeMachine.Status.Conditions
+	for i := range conditions {
+		if conditions[i].Type != conditionType {
+			continue
+		}
+		changed := conditions[i].Status != condition.Status ||
+			conditions[i].Reason != condition.Reason ||
+			conditions[i].Message != condition.Message
+
+		conditions[i].Status = condition.Status
+		conditions[i].Reason = condition.Reason
+		conditions[i].Message = condition.Message
+		conditions[i].ObservedGeneration = condition.ObservedGeneration
+		if changed {
+			conditions[i].LastTransitionTime = metav1.Now()
+		}
+		latitudeMachine.Status.Conditions = conditions
+		return
+	}
+
+	condition.LastTransitionTime = metav1.Now()
+	latitudeMachine.Status.Conditions = append(conditions, condition)
 }
 
 func (r *LatitudeMachineReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	r.recorder = mgr.GetEventRecorderFor("capl-latitudemachine")
+
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&infrav1.LatitudeMachine{}).
+		WithOptions(controller.Options{MaxConcurrentReconciles: 1}).
 		Complete(r)
 }

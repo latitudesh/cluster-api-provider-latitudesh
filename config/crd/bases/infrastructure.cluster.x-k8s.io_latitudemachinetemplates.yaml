@@ -46,10 +46,30 @@ spec:
                   spec:
                     properties:
                       operatingSystem:
+                        description: OperatingSystem is the operating system slug
+                          for the server
                         minLength: 1
                         type: string
                       plan:
+                        description: Plan is the server plan slug
                         minLength: 1
+                        type: string
+                      projectID:
+                        description: ProjectID is the Latitude.sh project ID
+                        type: string
+                      site:
+                        description: Site is the Latitude.sh site/region where the
+                          server will be deployed
+                        type: string
+                      sshKeys:
+                        description: SSHKeys is a list of SSH key IDs to be installed
+                          on the server
+                        items:
+                          type: string
+                        type: array
+                      userData:
+                        description: UserData is cloud-init user data to be applied
+                          to the server
                         type: string
                     required:
                     - operatingSystem

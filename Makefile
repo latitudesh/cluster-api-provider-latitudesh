@@ -112,6 +112,19 @@ build: manifests generate fmt vet ## Build manager binary.
 run: manifests generate fmt vet ## Run a controller from your host.
 	go run ./cmd/main.go
 
+.PHONY: bootstrap
+bootstrap: ## Bootstrap the cluster.
+	./hack/bootstrap.sh
+
+.PHONY: smoke-test
+smoke-test: ## Run the smoke test.
+	./hack/smoke_test.sh
+
+.PHONY: clean
+clean:
+	kind get clusters | xargs -I {} kind delete cluster --name {}
+	docker system prune -fa
+
 # If you wish to build the manager image targeting other platforms you can use the --platform flag.
 # (i.e. docker build --platform linux/arm64). However, you must enable docker buildKit for it.
 # More info: https://docs.docker.com/develop/develop-images/build_enhancements/

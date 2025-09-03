@@ -7,6 +7,7 @@ import (
 	"github.com/go-logr/logr"
 	infrav1 "github.com/latitudesh/cluster-api-provider-latitudesh/api/v1beta1"
 	controllers "github.com/latitudesh/cluster-api-provider-latitudesh/internal/controller"
+	"github.com/latitudesh/cluster-api-provider-latitudesh/internal/latitude"
 	"k8s.io/apimachinery/pkg/runtime"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
@@ -73,12 +74,30 @@ func main() {
 		os.Exit(1)
 	}
 
+	// Initialize Latitude.sh client
+	latitudeClient, err := latitude.NewClient()
+	if err != nil {
+		setupLog.Error(err, "unable to create Latitude.sh client")
+		os.Exit(1)
+	}
+
 	// LatitudeMachine controller
 	if err = (&controllers.LatitudeMachineReconciler{
-		Client: mgr.GetClient(),
-		Scheme: mgr.GetScheme(),
+		Client:         mgr.GetClient(),
+		Scheme:         mgr.GetScheme(),
+		LatitudeClient: latitudeClient,
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "LatitudeMachine")
+		os.Exit(1)
+	}
+
+	// LatitudeCluster controller
+	if err = (&controllers.LatitudeClusterReconciler{
+		Client:         mgr.GetClient(),
+		Scheme:         mgr.GetScheme(),
+		LatitudeClient: latitudeClient,
+	}).SetupWithManager(mgr); err != nil {
+		setupLog.Error(err, "unable to create controller", "controller", "LatitudeCluster")
 		os.Exit(1)
 	}
 

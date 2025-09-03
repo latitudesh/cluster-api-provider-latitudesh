@@ -127,7 +127,7 @@ kubectl get crds | grep 'cluster\.x-k8s\.io'
 # build and load
 export IMG="ttl.sh/capl-$(date +%s):1h"
 
-docker build -t "$IMG" .
+docker build --build-arg LATITUDE_API_KEY="${LATITUDE_API_KEY}" -t "$IMG" .
 kind load docker-image "$IMG" --name "$CLUSTER_NAME" || docker push "$IMG"
 
 docker tag "$IMG" capl-manager:dev
