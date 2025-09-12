@@ -24,6 +24,15 @@ type LatitudeMachineSpec struct {
 
 	// UserData is cloud-init user data to be applied to the server
 	UserData string `json:"userData,omitempty"`
+
+	// Raid is the RAID mode for the server
+	Raid string `json:"raid,omitempty"`
+
+	// Ipxe is the iPXE script to be used for the server
+	Ipxe string `json:"ipxe,omitempty"`
+
+	// Billing is the billing type for the server
+	Billing string `json:"billing,omitempty"`
 }
 
 type LatitudeMachineStatus struct {

@@ -205,6 +205,9 @@ func (r *LatitudeMachineReconciler) reconcileServer(ctx context.Context, latitud
 		Hostname:        r.getHostname(latitudeMachine),
 		SSHKeys:         latitudeMachine.Spec.SSHKeys,
 		UserData:        latitudeMachine.Spec.UserData,
+		Raid:            latitudeMachine.Spec.Raid,
+		Ipxe:            latitudeMachine.Spec.Ipxe,
+		Billing:         latitudeMachine.Spec.Billing,
 	}
 
 	server, err := r.LatitudeClient.CreateServer(ctx, spec)

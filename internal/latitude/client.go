@@ -23,6 +23,9 @@ type ServerSpec struct {
 	Hostname        string
 	SSHKeys         []string
 	UserData        string
+	Raid            string
+	Ipxe            string
+	Billing         string
 }
 
 type Server struct {
@@ -62,6 +65,9 @@ func (c *Client) CreateServer(ctx context.Context, spec ServerSpec) (*Server, er
 		Site:            (*operations.CreateServerSite)(&spec.Site),
 		Hostname:        &spec.Hostname,
 		SSHKeys:         spec.SSHKeys,
+		Raid:            (*operations.CreateServerRaid)(&spec.Raid),
+		Ipxe:            &spec.Ipxe,
+		Billing:         (*operations.CreateServerBilling)(&spec.Billing),
 	}
 
 	// Set billing to monthly as default

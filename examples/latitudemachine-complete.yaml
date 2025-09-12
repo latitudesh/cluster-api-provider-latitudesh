@@ -1,0 +1,15 @@
+apiVersion: infrastructure.cluster.x-k8s.io/v1beta1
+kind: LatitudeMachine
+metadata:
+  name: complete-node
+  namespace: default
+spec:
+  plan: c2-small-x86
+  operatingSystem: ubuntu-24.04
+  projectID: project-id
+  site: SAO2
+  sshKeys:
+    - ssh-key-id
+  userData: |
+    #!/bin/bash
+    echo "Hello from Latitude.sh!" > /tmp/hello.txt
