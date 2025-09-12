@@ -4,6 +4,7 @@ set -euo pipefail
 source "$(dirname "$0")/.env.dev"
 
 CAPL_NAMESPACE="${CAPL_NAMESPACE:-capl-dev}"
+CLUSTER_NAME="${CLUSTER_NAME:-capl-system}"
 
 # Detect architecture
 ARCH_RAW=$(uname -m) # x86_64 | aarch64 | arm64
@@ -56,15 +57,13 @@ install_docker() {
 install_clusterctl() {
   if command -v clusterctl &>/dev/null; then return; fi
   echo "⚠️ clusterctl not found. Installing..."
-  version=$(curl -fsSL https://api.github.com/repos/kubernetes-sigs/cluster-api/releases/latest |
-    grep tag_name |
-    cut -d '"' -f4)
-  url="https://github.com/kubernetes-sigs/cluster-api/releases/download/${version}/clusterctl-linux-${ARCH}"
-  echo "→ $url"
+
+  CLUSTERCTL_VERSION="${CLUSTERCTL_VERSION:-v1.11.1}"
+  url="https://github.com/kubernetes-sigs/cluster-api/releases/download/${CLUSTERCTL_VERSION}/clusterctl-linux-${ARCH}"
   curl -fsSL "$url" -o clusterctl
   chmod +x clusterctl
   sudo mv clusterctl /usr/local/bin/clusterctl
-  echo "✅ clusterctl installed ($(clusterctl version | head -n1))"
+  echo "✅ clusterctl installed ($CLUSTERCTL_VERSION)"
 }
 
 install_kustomize() {
@@ -129,27 +128,41 @@ kubectl -n cert-manager rollout status deploy/cert-manager --timeout=4m
 kubectl -n cert-manager rollout status deploy/cert-manager-webhook --timeout=4m
 kubectl -n cert-manager rollout status deploy/cert-manager-cainjector --timeout=4m
 
+# build/load image & overrides
+export IMG="ttl.sh/capl-$(date +%s):1h"
+export STABLE_IMG="${STABLE_IMG:-capl-manager:dev}"
+export CAPL_VERSION="${CAPL_VERSION:-v0.1.0}"
+
+#docker build --build-arg LATITUDE_API_KEY="${LATITUDE_API_KEY:-}" -t "$STABLE_IMG" .
+#kind load docker-image "$STABLE_IMG" --name "$CLUSTER_NAME" || docker push "$STABLE_IMG"
+
+docker build --build-arg LATITUDE_API_KEY="${LATITUDE_API_KEY:-}" \
+	-t "$STABLE_IMG" \
+	-t "$IMG" \
+	.
+
+kind load docker-image "$STABLE_IMG" --name "$CLUSTER_NAME" || true
+
+#kind load docker-image "$STABLE_IMG" --name "$CLUSTER_NAME" || true
+echo "STABLE_IMG=$STABLE_IMG"
+
 # secret
+kubectl get ns "${CAPL_NAMESPACE}" >/dev/null 2>&1 || kubectl create ns "${CAPL_NAMESPACE}"
+
 BASE_URL="https://api.latitudesh.sh"
 
 kubectl get ns ${CAPL_NAMESPACE} >/dev/null 2>&1 || kubectl create ns ${CAPL_NAMESPACE}
 
-kubectl -n ${CAPL_NAMESPACE} create secret generic latitudesh-credentials \
+kubectl -n "${CAPL_NAMESPACE}" create secret generic latitudesh-credentials \
+  --from-literal=API_TOKEN="${LATITUDE_API_KEY:-dummy-token}" \
   --from-literal=LATITUDE_API_KEY="${LATITUDE_API_KEY:-dummy-token}" \
   --from-literal=BASE_URL="${LATITUDE_BASE_URL:-https://api.latitudesh.sh}" \
   --dry-run=client -o yaml | kubectl apply -f -
 
-# build/load image & overrides
-export IMG="ttl.sh/capl-$(date +%s):1h"
-export CAPL_VERSION="${CAPL_VERSION:-v0.1.0}"
-
-docker build --build-arg LATITUDE_API_KEY="${LATITUDE_API_KEY:-}" -t "$IMG" .
-kind load docker-image "$IMG" --name "$CLUSTER_NAME" || docker push "$IMG"
-
-docker tag "$IMG" capl-manager:dev
-kind load docker-image capl-manager:dev --name "$CLUSTER_NAME"
-
-echo "IMG=$IMG"
+#kubectl -n ${CAPL_NAMESPACE} create secret generic latitudesh-credentials \
+#  --from-literal=LATITUDE_API_KEY="${LATITUDE_API_KEY:-dummy-token}" \
+#  --from-literal=BASE_URL="${LATITUDE_BASE_URL:-https://api.latitudesh.sh}" \
+#  --dry-run=client -o yaml | kubectl apply -f -
 
 command -v make >/dev/null && {
   make generate || true
@@ -158,14 +171,17 @@ command -v make >/dev/null && {
 
 kustomize build config/crd | kubectl apply -f -
 (
-  cd config/default && kustomize edit set namespace "$CAPL_NAMESPACE"
-  kustomize edit set image controller="$IMG" || kustomize edit set image manager="$IMG"
+  cd config/default
+
+  kustomize edit set namespace "$CAPL_NAMESPACE"
+  kustomize edit set image controller="$STABLE_IMG" || kustomize edit set image manager="$STABLE_IMG"
 )
 
 kustomize build config/default > "/tmp/components.yaml"
 
 cat > "/tmp/metadata.yaml" <<'YAML'
 apiVersion: clusterctl.cluster.x-k8s.io/v1alpha3
+kind: Metadata
 releaseSeries:
 - major: 0
   minor: 1
@@ -193,14 +209,10 @@ ls -l $BASE
 
 # clusterctl init 
 echo "$ clusterctl init --infrastructure latitudesh"
-CLUSTERCTL_CONFIG="$HOME/.cluster-api/clusterctl.yaml" clusterctl init \
-  --core cluster-api \
-  --bootstrap kubeadm \
-  --control-plane kubeadm \
-  --infrastructure latitudesh
+
+clusterctl init --infrastructure latitudesh
 
 kubectl -n capi-system get deploy
 kubectl get crds | grep -E 'cluster\.x-k8s\.io|latitudesh'
 
-kubectl -n ${CAPL_NAMESPACE} rollout status deploy/capl-controller-manager --timeout=5m
-kubectl -n ${CAPL_NAMESPACE} logs deploy/capl-controller-manager -c manager --tail=200
+kubectl -n "$CAPL_NAMESPACE" rollout status deploy/capl-controller-manager --timeout=5m
