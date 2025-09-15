@@ -85,6 +85,8 @@ install_kustomize
 install_docker
 
 # kind
+KIND_NODE_IMAGE="${KIND_NODE_IMAGE:-kindest/node:v1.29.8}"
+
 if ! kind get clusters | grep -qx "$CLUSTER_NAME"; then
   cat >/tmp/kind-${CLUSTER_NAME}.yaml <<YAML
 kind: Cluster
@@ -92,9 +94,11 @@ apiVersion: kind.x-k8s.io/v1alpha4
 name: ${CLUSTER_NAME}
 nodes:
 - role: control-plane
+  image: ${KIND_NODE_IMAGE}
 - role: worker
+  image: ${KIND_NODE_IMAGE}
 YAML
-  kind create cluster --config /tmp/kind-${CLUSTER_NAME}.yaml
+  kind create cluster --config /tmp/kind-${CLUSTER_NAME}.yaml --wait 120s
 else
   echo "Kind cluster '${CLUSTER_NAME}' already exists"
 fi
@@ -130,7 +134,14 @@ kubectl -n cert-manager rollout status deploy/cert-manager-cainjector --timeout=
 
 # build/load image & overrides
 export IMG="ttl.sh/capl-$(date +%s):1h"
-export STABLE_IMG="${STABLE_IMG:-capl-manager:dev}"
+export STABLE_IMG_NAME="${STABLE_IMG_NAME:-capl-manager:dev}"
+
+STABLE_IMG="${STABLE_IMG:-ghcr.io/latitudesh/${STABLE_IMG_NAME}}"
+
+if [[ "$STABLE_IMG" != */* ]]; then
+  STABLE_IMG="ghcr.io/latitudesh/${STABLE_IMG}"
+fi
+
 export CAPL_VERSION="${CAPL_VERSION:-v0.1.0}"
 
 #docker build --build-arg LATITUDE_API_KEY="${LATITUDE_API_KEY:-}" -t "$STABLE_IMG" .
@@ -178,6 +189,11 @@ kustomize build config/crd | kubectl apply -f -
 )
 
 kustomize build config/default > "/tmp/components.yaml"
+
+# hard-fix
+sed -i -E 's#(image:[[:space:]]*)(manager:[^[:space:]]*)#\1'"$STABLE_IMG"'#g' /tmp/components.yaml
+sed -i -E 's#(image:[[:space:]]*)(controller:[^[:space:]]*)#\1'"$STABLE_IMG"'#g' /tmp/components.yaml
+sed -i -E 's#(image:[[:space:]]*)(capl-manager:[^[:space:]]*)#\1'"$STABLE_IMG"'#g' /tmp/components.yaml
 
 cat > "/tmp/metadata.yaml" <<'YAML'
 apiVersion: clusterctl.cluster.x-k8s.io/v1alpha3
