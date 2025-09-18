@@ -18,7 +18,7 @@ arm64 | aarch64) ARCH=arm64 ;;
 esac
 
 # Versions (can be overridden via env vars)
-KIND_VERSION="${KIND_VERSION:-v0.23.0}"
+KIND_VERSION="${KIND_VERSION:-v0.26.0}"
 KUBECTL_VERSION="${KUBECTL_VERSION:-$(curl -fsSL https://dl.k8s.io/release/stable.txt)}"
 
 install_kind() {
@@ -132,6 +132,8 @@ kubectl -n cert-manager rollout status deploy/cert-manager --timeout=4m
 kubectl -n cert-manager rollout status deploy/cert-manager-webhook --timeout=4m
 kubectl -n cert-manager rollout status deploy/cert-manager-cainjector --timeout=4m
 
+kubectl -n cert-manager wait --for=condition=Available deploy/cert-manager-webhook --timeout=4m
+
 # build/load image & overrides
 export IMG="ttl.sh/capl-$(date +%s):1h"
 export STABLE_IMG_NAME="${STABLE_IMG_NAME:-capl-manager:dev}"
@@ -161,8 +163,6 @@ echo "STABLE_IMG=$STABLE_IMG"
 kubectl get ns "${CAPL_NAMESPACE}" >/dev/null 2>&1 || kubectl create ns "${CAPL_NAMESPACE}"
 
 BASE_URL="https://api.latitudesh.sh"
-
-kubectl get ns ${CAPL_NAMESPACE} >/dev/null 2>&1 || kubectl create ns ${CAPL_NAMESPACE}
 
 kubectl -n "${CAPL_NAMESPACE}" create secret generic latitudesh-credentials \
   --from-literal=API_TOKEN="${LATITUDE_API_KEY:-dummy-token}" \
@@ -201,7 +201,7 @@ kind: Metadata
 releaseSeries:
 - major: 0
   minor: 1
-  contract: v1beta1
+  contract: v1beta2
 YAML
 
 PROVIDER=infrastructure-latitudesh
@@ -229,6 +229,6 @@ echo "$ clusterctl init --infrastructure latitudesh"
 clusterctl init --infrastructure latitudesh
 
 kubectl -n capi-system get deploy
-kubectl get crds | grep -E 'cluster\.x-k8s\.io|latitudesh'
+kubectl -n "$CAPL_NAMESPACE" get deploy,pods
 
 kubectl -n "$CAPL_NAMESPACE" rollout status deploy/capl-controller-manager --timeout=5m
