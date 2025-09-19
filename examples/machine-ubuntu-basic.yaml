@@ -4,8 +4,8 @@ metadata:
   name: example-latitudemachine
   namespace: default
 spec:
-  projectID: "<PROJECT_ID"
-  site: "DAL"
+  projectID: "<PROJECT_ID>"
+  site: "SAO2"
   plan: "c2-small-x86"
   operatingSystem: "ubuntu_24_04_x64_lts"
   sshKeys: ["<SSH_KEY_ID>"]
