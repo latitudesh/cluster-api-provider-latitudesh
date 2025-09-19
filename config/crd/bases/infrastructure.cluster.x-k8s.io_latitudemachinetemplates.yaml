@@ -5,9 +5,6 @@ metadata:
   annotations:
     controller-gen.kubebuilder.io/version: v0.18.0
   name: latitudemachinetemplates.infrastructure.cluster.x-k8s.io
-  labels:
-    cluster.x-k8s.io/api-version-v1beta1: v1beta1
-    cluster.x-k8s.io/api-version-v1beta2: v1beta2
 spec:
   group: infrastructure.cluster.x-k8s.io
   names:
@@ -15,76 +12,73 @@ spec:
     listKind: LatitudeMachineTemplateList
     plural: latitudemachinetemplates
     shortNames:
-      - latmt
+    - latmt
     singular: latitudemachinetemplate
   scope: Namespaced
-  conversion:
-    strategy: None
   versions:
-    - name: v1beta1
-      served: true
-      storage: false
-      schema:
-        openAPIV3Schema: &LatitudeMachineTemplateSchema
-          type: object
-          properties:
-            apiVersion:
-              description: |-
-                APIVersion defines the versioned schema of this representation of an object.
-                Servers should convert recognized schemas to the latest internal value, and
-                may reject unrecognized values.
-                More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
-              type: string
-            kind:
-              description: |-
-                Kind is a string value representing the REST resource this object represents.
-                Servers may infer this from the endpoint the client submits requests to.
-                Cannot be updated.
-                In CamelCase.
-                More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
-              type: string
-            metadata:
-              type: object
-            spec:
-              type: object
-              properties:
-                template:
-                  type: object
-                  properties:
-                    metadata:
-                      type: object
-                    spec:
-                      type: object
-                      properties:
-                        operatingSystem:
-                          description: OperatingSystem is the operating system slug for the server
-                          minLength: 1
+  - name: v1beta1
+    schema:
+      openAPIV3Schema:
+        properties:
+          apiVersion:
+            description: |-
+              APIVersion defines the versioned schema of this representation of an object.
+              Servers should convert recognized schemas to the latest internal value, and
+              may reject unrecognized values.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+            type: string
+          kind:
+            description: |-
+              Kind is a string value representing the REST resource this object represents.
+              Servers may infer this from the endpoint the client submits requests to.
+              Cannot be updated.
+              In CamelCase.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+            type: string
+          metadata:
+            type: object
+          spec:
+            properties:
+              template:
+                properties:
+                  metadata:
+                    type: object
+                  spec:
+                    properties:
+                      operatingSystem:
+                        description: OperatingSystem is the operating system slug
+                          for the server
+                        minLength: 1
+                        type: string
+                      plan:
+                        description: Plan is the server plan slug
+                        minLength: 1
+                        type: string
+                      projectID:
+                        description: ProjectID is the Latitude.sh project ID
+                        type: string
+                      site:
+                        description: Site is the Latitude.sh site/region where the
+                          server will be deployed
+                        type: string
+                      sshKeys:
+                        description: SSHKeys is a list of SSH key IDs to be installed
+                          on the server
+                        items:
                           type: string
-                        plan:
-                          description: Plan is the server plan slug
-                          minLength: 1
-                          type: string
-                        projectID:
-                          description: ProjectID is the Latitude.sh project ID
-                          type: string
-                        site:
-                          description: Site is the Latitude.sh site/region where the server will be deployed
-                          type: string
-                        sshKeys:
-                          description: SSHKeys is a list of SSH key IDs to be installed on the server
-                          type: array
-                          items:
-                            type: string
-                        userData:
-                          description: UserData is cloud-init user data to be applied to the server
-                          type: string
-                      required:
-                        - operatingSystem
-                        - plan
-              required:
-                - template
-    - name: v1beta2
-      served: true
-      storage: true
-      schema:
-        openAPIV3Schema: *LatitudeMachineTemplateSchema
+                        type: array
+                      userData:
+                        description: UserData is cloud-init user data to be applied
+                          to the server
+                        type: string
+                    required:
+                    - operatingSystem
+                    - plan
+                    type: object
+                type: object
+            required:
+            - template
+            type: object
+        type: object
+    served: true
+    storage: true
