@@ -1,18 +1,12 @@
 apiVersion: apps/v1
 kind: Deployment
+metadata:
+  name: capl-controller-manager
 spec:
   template:
     spec:
       containers:
-        - name: manager
-          env:
-            - name: LATITUDESH_BEARER
-              valueFrom:
-                secretKeyRef:
-                  name: latitudesh-credentials
-                  key: API_TOKEN
-            - name: LATITUDESH_BASE_URL
-              valueFrom:
-                secretKeyRef:
-                  name: latitudesh-credentials
-                  key: BASE_URL
+      - name: manager
+        envFrom:
+        - secretRef:
+            name: latitudesh-credentials

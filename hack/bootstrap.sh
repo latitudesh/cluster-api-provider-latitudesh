@@ -3,7 +3,8 @@
 set -euo pipefail
 source "$(dirname "$0")/.env.dev"
 
-CAPL_NAMESPACE="${CAPL_NAMESPACE:-capl-system}"
+CAPL_NAMESPACE="${CAPL_NAMESPACE:-capl-dev}"
+CLUSTER_NAME="${CLUSTER_NAME:-capl-system}"
 
 # Detect architecture
 ARCH_RAW=$(uname -m) # x86_64 | aarch64 | arm64
@@ -17,7 +18,7 @@ arm64 | aarch64) ARCH=arm64 ;;
 esac
 
 # Versions (can be overridden via env vars)
-KIND_VERSION="${KIND_VERSION:-v0.23.0}"
+KIND_VERSION="${KIND_VERSION:-v0.26.0}"
 KUBECTL_VERSION="${KUBECTL_VERSION:-$(curl -fsSL https://dl.k8s.io/release/stable.txt)}"
 
 install_kind() {
@@ -56,24 +57,36 @@ install_docker() {
 install_clusterctl() {
   if command -v clusterctl &>/dev/null; then return; fi
   echo "⚠️ clusterctl not found. Installing..."
-  version=$(curl -fsSL https://api.github.com/repos/kubernetes-sigs/cluster-api/releases/latest |
-    grep tag_name |
-    cut -d '"' -f4)
-  url="https://github.com/kubernetes-sigs/cluster-api/releases/download/${version}/clusterctl-linux-${ARCH}"
-  echo "→ $url"
+
+  CLUSTERCTL_VERSION="${CLUSTERCTL_VERSION:-v1.11.1}"
+  url="https://github.com/kubernetes-sigs/cluster-api/releases/download/${CLUSTERCTL_VERSION}/clusterctl-linux-${ARCH}"
   curl -fsSL "$url" -o clusterctl
   chmod +x clusterctl
   sudo mv clusterctl /usr/local/bin/clusterctl
-  echo "✅ clusterctl installed ($(clusterctl version | head -n1))"
+  echo "✅ clusterctl installed ($CLUSTERCTL_VERSION)"
+}
+
+install_kustomize() {
+  if command -v kustomize >/dev/null 2>&1; then
+    return
+  fi
+  echo "! kustomize not found. installing..."
+  curl -s https://raw.githubusercontent.com/kubernetes-sigs/kustomize/master/hack/install_kustomize.sh | bash
+  mkdir -p "$HOME/bin"
+  mv kustomize "$HOME/bin/kustomize"
+  export PATH="$HOME/bin:$PATH"
 }
 
 # install dependencies if missing
 install_kind
 install_kubectl
 install_clusterctl
+install_kustomize
 install_docker
 
 # kind
+KIND_NODE_IMAGE="${KIND_NODE_IMAGE:-kindest/node:v1.29.8}"
+
 if ! kind get clusters | grep -qx "$CLUSTER_NAME"; then
   cat >/tmp/kind-${CLUSTER_NAME}.yaml <<YAML
 kind: Cluster
@@ -81,9 +94,11 @@ apiVersion: kind.x-k8s.io/v1alpha4
 name: ${CLUSTER_NAME}
 nodes:
 - role: control-plane
+  image: ${KIND_NODE_IMAGE}
 - role: worker
+  image: ${KIND_NODE_IMAGE}
 YAML
-  kind create cluster --config /tmp/kind-${CLUSTER_NAME}.yaml
+  kind create cluster --config /tmp/kind-${CLUSTER_NAME}.yaml --wait 120s
 else
   echo "Kind cluster '${CLUSTER_NAME}' already exists"
 fi
@@ -107,7 +122,6 @@ kubectl get nodes -o wide
 kubectl -n kube-system get pods
 
 # cert-manager
-#CERT_MANAGER_FILE="$(dirname "$0")/../hack/cert-manager.crds.yaml"
 CERT_MANAGER_FILE="cert-manager.crds.yaml"
 curl -L \
   https://github.com/cert-manager/cert-manager/releases/download/v1.18.2/cert-manager.yaml \
@@ -118,49 +132,49 @@ kubectl -n cert-manager rollout status deploy/cert-manager --timeout=4m
 kubectl -n cert-manager rollout status deploy/cert-manager-webhook --timeout=4m
 kubectl -n cert-manager rollout status deploy/cert-manager-cainjector --timeout=4m
 
-# install CAPI
-clusterctl init --infrastructure docker
+kubectl -n cert-manager wait --for=condition=Available deploy/cert-manager-webhook --timeout=4m
 
-kubectl -n capi-system get deploy
-kubectl get crds | grep 'cluster\.x-k8s\.io'
-
-# build and load
+# build/load image & overrides
 export IMG="ttl.sh/capl-$(date +%s):1h"
+export STABLE_IMG_NAME="${STABLE_IMG_NAME:-capl-manager:dev}"
 
-docker build --build-arg LATITUDE_API_KEY="${LATITUDE_API_KEY}" -t "$IMG" .
-kind load docker-image "$IMG" --name "$CLUSTER_NAME" || docker push "$IMG"
+STABLE_IMG="${STABLE_IMG:-ghcr.io/latitudesh/${STABLE_IMG_NAME}}"
 
-docker tag "$IMG" capl-manager:dev
-kind load docker-image capl-manager:dev --name "$CLUSTER_NAME"
+if [[ "$STABLE_IMG" != */* ]]; then
+  STABLE_IMG="ghcr.io/latitudesh/${STABLE_IMG}"
+fi
 
-echo "IMG=$IMG"
+export CAPL_VERSION="${CAPL_VERSION:-v0.1.0}"
+
+#docker build --build-arg LATITUDE_API_KEY="${LATITUDE_API_KEY:-}" -t "$STABLE_IMG" .
+#kind load docker-image "$STABLE_IMG" --name "$CLUSTER_NAME" || docker push "$STABLE_IMG"
+
+docker build --build-arg LATITUDE_API_KEY="${LATITUDE_API_KEY:-}" \
+	-t "$STABLE_IMG" \
+	-t "$IMG" \
+	.
+
+kind load docker-image "$STABLE_IMG" --name "$CLUSTER_NAME" || true
+
+#kind load docker-image "$STABLE_IMG" --name "$CLUSTER_NAME" || true
+echo "STABLE_IMG=$STABLE_IMG"
 
 # secret
-API_TOKEN="YOUR_API_TOKEN"
+kubectl get ns "${CAPL_NAMESPACE}" >/dev/null 2>&1 || kubectl create ns "${CAPL_NAMESPACE}"
+
 BASE_URL="https://api.latitudesh.sh"
 
-kubectl get ns ${CAPL_NAMESPACE} >/dev/null 2>&1 || kubectl create ns ${CAPL_NAMESPACE}
-
-kubectl -n ${CAPL_NAMESPACE} create secret generic latitudesh-credentials \
-  --from-literal=API_TOKEN="${LATITUDE_BEARER:-dummy-token}" \
+kubectl -n "${CAPL_NAMESPACE}" create secret generic latitudesh-credentials \
+  --from-literal=API_TOKEN="${LATITUDE_API_KEY:-dummy-token}" \
+  --from-literal=LATITUDE_API_KEY="${LATITUDE_API_KEY:-dummy-token}" \
   --from-literal=BASE_URL="${LATITUDE_BASE_URL:-https://api.latitudesh.sh}" \
   --dry-run=client -o yaml | kubectl apply -f -
 
-# kustomize
-ensure_kustomize() {
-  if command -v kustomize >/dev/null 2>&1; then
-    return
-  fi
-  echo "! kustomize not found. installing..."
-  curl -s https://raw.githubusercontent.com/kubernetes-sigs/kustomize/master/hack/install_kustomize.sh | bash
-  mkdir -p "$HOME/bin"
-  mv kustomize "$HOME/bin/kustomize"
-  export PATH="$HOME/bin:$PATH"
-}
+#kubectl -n ${CAPL_NAMESPACE} create secret generic latitudesh-credentials \
+#  --from-literal=LATITUDE_API_KEY="${LATITUDE_API_KEY:-dummy-token}" \
+#  --from-literal=BASE_URL="${LATITUDE_BASE_URL:-https://api.latitudesh.sh}" \
+#  --dry-run=client -o yaml | kubectl apply -f -
 
-ensure_kustomize
-
-# apply crds
 command -v make >/dev/null && {
   make generate || true
   make manifests || true
@@ -168,10 +182,53 @@ command -v make >/dev/null && {
 
 kustomize build config/crd | kubectl apply -f -
 (
-  cd config/default && kustomize edit set namespace "$CAPL_NAMESPACE"
-  kustomize edit set image capl-manager:dev="$IMG"
-)
-kustomize build config/default | kubectl apply -f -
+  cd config/default
 
-kubectl -n ${CAPL_NAMESPACE} rollout status deploy/capl-controller-manager --timeout=5m
-kubectl -n ${CAPL_NAMESPACE} logs deploy/capl-controller-manager -c manager --tail=200
+  kustomize edit set namespace "$CAPL_NAMESPACE"
+  kustomize edit set image controller="$STABLE_IMG" || kustomize edit set image manager="$STABLE_IMG"
+)
+
+kustomize build config/default > "/tmp/components.yaml"
+
+# hard-fix
+sed -i -E 's#(image:[[:space:]]*)(manager:[^[:space:]]*)#\1'"$STABLE_IMG"'#g' /tmp/components.yaml
+sed -i -E 's#(image:[[:space:]]*)(controller:[^[:space:]]*)#\1'"$STABLE_IMG"'#g' /tmp/components.yaml
+sed -i -E 's#(image:[[:space:]]*)(capl-manager:[^[:space:]]*)#\1'"$STABLE_IMG"'#g' /tmp/components.yaml
+
+cat > "/tmp/metadata.yaml" <<'YAML'
+apiVersion: clusterctl.cluster.x-k8s.io/v1alpha3
+kind: Metadata
+releaseSeries:
+- major: 0
+  minor: 1
+  contract: v1beta2
+YAML
+
+PROVIDER=infrastructure-latitudesh
+VERSION=v0.1.0
+BASE="$HOME/.cluster-api/overrides/${PROVIDER}/${VERSION}"
+
+mkdir -p "$BASE"
+cp /tmp/components.yaml "$BASE/components.yaml"
+cp /tmp/metadata.yaml  "$BASE/metadata.yaml"
+
+# clusterctl config local
+cat > "$HOME/.cluster-api/clusterctl.yaml" <<EOF
+providers:
+  - name: "latitudesh"
+    type: "InfrastructureProvider"
+    url: "file://$BASE/components.yaml"
+EOF
+
+echo "$ overrides OK!"
+ls -l $BASE
+
+# clusterctl init 
+echo "$ clusterctl init --infrastructure latitudesh"
+
+clusterctl init --infrastructure latitudesh
+
+kubectl -n capi-system get deploy
+kubectl -n "$CAPL_NAMESPACE" get deploy,pods
+
+kubectl -n "$CAPL_NAMESPACE" rollout status deploy/capl-controller-manager --timeout=5m

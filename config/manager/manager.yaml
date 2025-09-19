@@ -50,6 +50,11 @@ spec:
                 secretKeyRef:
                   name: latitudesh-credentials
                   key: API_TOKEN
+            - name: LATITUDE_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: latitudesh-credentials
+                  key: LATITUDE_API_KEY
             - name: LATITUDESH_BASE_URL
               valueFrom:
                 secretKeyRef:
