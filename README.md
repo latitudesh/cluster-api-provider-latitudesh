@@ -1,8 +1,8 @@
 # cluster-api-provider-latitudesh
-// TODO(user): Add simple overview of use/purpose
 
-## Description
-// TODO(user): An in-depth paragraph about your project and overview of use
+> [!WARNING]
+> This project is currently in **early alpha**.  
+> It is **not production-ready** and may change significantly as development continues.
 
 ## Getting Started
 
