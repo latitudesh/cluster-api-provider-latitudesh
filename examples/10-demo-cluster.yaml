@@ -2,32 +2,32 @@
 apiVersion: infrastructure.cluster.x-k8s.io/v1beta1
 kind: LatitudeCluster
 metadata:
-  name: demo
+  name: capl-demo
   namespace: default
 spec:
-  location: "DAL"
+  location: "SAO2"
   projectRef:
-    projectID: "proj_jv6m5JyZDNLPe"
+    projectID: "<PROJECT_ID>"
 ---
 apiVersion: infrastructure.cluster.x-k8s.io/v1beta1
 kind: LatitudeMachineTemplate
 metadata:
-  name: demo-control-plane
+  name: capl-demo-control-plane
   namespace: default
 spec:
   template:
     spec:
-      projectID: "proj_jv6m5JyZDNLPe"
-      site: "DAL"
+      projectID: "<PROJECT_ID>"
+      site: "SAO2"
       plan: "c2.smal.x86"
       operatingSystem: "ubuntu_24_04_x64_lts"
       sshKeys:
-      - "ssh_dexA0q4pXalQV"
+      - "<SSH_KEY_ID>"
 ---
 apiVersion: controlplane.cluster.x-k8s.io/v1beta1
 kind: KubeadmControlPlane
 metadata:
-  name: demo-control-plane
+  name: capl-demo-control-plane
   namespace: default
 spec:
   replicas: 1
@@ -36,7 +36,7 @@ spec:
     infrastructureRef:
       apiVersion: infrastructure.cluster.x-k8s.io/v1beta1
       kind: LatitudeMachineTemplate
-      name: demo-control-plane
+      name: capl-demo-control-plane
   kubeadmConfigSpec:
     clusterConfiguration:
       controllerManager: {}
@@ -47,14 +47,14 @@ spec:
 apiVersion: cluster.x-k8s.io/v1beta1
 kind: Cluster
 metadata:
-  name: demo
+  name: capl-demo
   namespace: default
 spec:
   infrastructureRef:
     apiVersion: infrastructure.cluster.x-k8s.io/v1beta1
     kind: LatitudeCluster
-    name: demo
+    name: capl-demo
   controlPlaneRef:
     apiVersion: controlplane.cluster.x-k8s.io/v1beta1
     kind: KubeadmControlPlane
-    name: demo-control-plane
+    name: capl-demo-control-plane
