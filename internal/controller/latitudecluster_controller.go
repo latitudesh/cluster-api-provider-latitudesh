@@ -118,9 +118,9 @@ func (r *LatitudeClusterReconciler) reconcileNormal(ctx context.Context, latitud
 	}
 
 	// Setup control plane endpoint if specified
-	if latitudeCluster.Spec.ControlPlaneEndpoint.Host != "" {
-		latitudeCluster.Status.ControlPlaneEndpoint = latitudeCluster.Spec.ControlPlaneEndpoint
-	}
+	// if latitudeCluster.Spec.ControlPlaneEndpoint.Host != "" {
+	// 	latitudeCluster.Status.ControlPlaneEndpoint = latitudeCluster.Spec.ControlPlaneEndpoint
+	// }
 
 	// Mark cluster as ready
 	latitudeCluster.Status.Ready = true
@@ -165,11 +165,11 @@ func (r *LatitudeClusterReconciler) validateClusterSpec(latitudeCluster *infrav1
 	}
 
 	// Validate control plane endpoint if specified
-	if latitudeCluster.Spec.ControlPlaneEndpoint.Host != "" {
-		if latitudeCluster.Spec.ControlPlaneEndpoint.Port <= 0 {
-			errors = append(errors, "controlPlaneEndpoint.port must be greater than 0 when host is specified")
-		}
-	}
+	// if latitudeCluster.Spec.ControlPlaneEndpoint.Host != "" {
+	// 	if latitudeCluster.Spec.ControlPlaneEndpoint.Port <= 0 {
+	// 		errors = append(errors, "controlPlaneEndpoint.port must be greater than 0 when host is specified")
+	// 	}
+	// }
 
 	if len(errors) > 0 {
 		return fmt.Errorf("validation failed: %s", strings.Join(errors, ", "))

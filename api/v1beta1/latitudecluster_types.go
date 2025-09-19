@@ -39,7 +39,6 @@ type LatitudeClusterStatus struct {
 // +kubebuilder:subresource:status
 // +kubebuilder:resource:path=latitudeclusters,scope=Namespaced,shortName=latc
 // +kubebuilder:printcolumn:name="Ready",type="string",JSONPath=".status.ready"
-// +kubebuilder:printcolumn:name="Endpoint",type="string",JSONPath=".status.controlPlaneEndpoint.host"
 type LatitudeCluster struct {
 	metav1.TypeMeta   `json:",inline"`
 	metav1.ObjectMeta `json:"metadata,omitempty"`
