@@ -30,10 +30,8 @@ type LatitudeClusterStatus struct {
 	// Ready indicates that the cluster infrastructure is ready
 	Ready bool `json:"ready,omitempty"`
 
-	// ControlPlaneEndpoint represents the endpoint used to communicate with the control plane
-	ControlPlaneEndpoint APIEndpoint `json:"controlPlaneEndpoint,omitempty"`
-
 	// Conditions defines current service state of the LatitudeCluster
+	// +optional
 	Conditions []metav1.Condition `json:"conditions,omitempty"`
 }
 
