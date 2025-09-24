@@ -9,9 +9,7 @@ type LatitudeMachineTemplateSpec struct {
 }
 
 type LatitudeMachineTemplateResource struct {
-	// +optional
-	metav1.ObjectMeta `json:"metadata,omitempty"`
-	Spec              LatitudeMachineSpec `json:"spec,omitempty"`
+	Spec LatitudeMachineSpec `json:"spec,omitempty"`
 }
 
 // +kubebuilder:object:root=true

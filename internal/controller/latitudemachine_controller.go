@@ -215,12 +215,6 @@ func (r *LatitudeMachineReconciler) reconcileServer(ctx context.Context, latitud
 	latitudeMachine.Status.ServerID = server.ID
 	log.Info("Created server", "serverID", server.ID, "duration", time.Since(start))
 
-	// Wait for server to be ready
-	// readyServer, err := r.LatitudeClient.WaitForServer(ctx, server.ID, "active", 10*time.Minute)
-	// if err != nil {
-	// 	return nil, fmt.Errorf("server creation timed out: %w", err)
-	// }
-
 	if err := patchHelper.Patch(ctx, latitudeMachine, patch.WithStatusObservedGeneration{}); err != nil {
 		log.Error(err, "failed to persist status after CreateServer")
 	}
