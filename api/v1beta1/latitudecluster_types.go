@@ -30,10 +30,8 @@ type LatitudeClusterStatus struct {
 	// Ready indicates that the cluster infrastructure is ready
 	Ready bool `json:"ready,omitempty"`
 
-	// ControlPlaneEndpoint represents the endpoint used to communicate with the control plane
-	ControlPlaneEndpoint APIEndpoint `json:"controlPlaneEndpoint,omitempty"`
-
 	// Conditions defines current service state of the LatitudeCluster
+	// +optional
 	Conditions []metav1.Condition `json:"conditions,omitempty"`
 }
 
@@ -41,7 +39,6 @@ type LatitudeClusterStatus struct {
 // +kubebuilder:subresource:status
 // +kubebuilder:resource:path=latitudeclusters,scope=Namespaced,shortName=latc
 // +kubebuilder:printcolumn:name="Ready",type="string",JSONPath=".status.ready"
-// +kubebuilder:printcolumn:name="Endpoint",type="string",JSONPath=".status.controlPlaneEndpoint.host"
 type LatitudeCluster struct {
 	metav1.TypeMeta   `json:",inline"`
 	metav1.ObjectMeta `json:"metadata,omitempty"`
