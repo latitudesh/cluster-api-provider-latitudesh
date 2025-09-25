@@ -41,8 +41,6 @@ spec:
             properties:
               template:
                 properties:
-                  metadata:
-                    type: object
                   spec:
                     properties:
                       operatingSystem:
