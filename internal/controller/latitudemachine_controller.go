@@ -121,9 +121,13 @@ func (r *LatitudeMachineReconciler) reconcileNormal(ctx context.Context, latitud
 		return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
 	}
 
+	pid := fmt.Sprintf("latitude://%s", server.ID)
+
+	latitudeMachine.Spec.ProviderID = &pid
+
 	// Update machine status
 	latitudeMachine.Status.Ready = true
-	latitudeMachine.Status.ProviderID = fmt.Sprintf("latitude://%s", server.ID)
+	latitudeMachine.Status.ProviderID = pid
 	latitudeMachine.Status.ServerID = server.ID
 
 	// Set addresses if available
