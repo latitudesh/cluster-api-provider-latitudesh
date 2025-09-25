@@ -45,5 +45,5 @@ apiVersion: kustomize.config.k8s.io/v1beta1
 kind: Kustomization
 images:
 - name: controller
-  newName: capl-manager
+  newName: ghcr.io/latitudesh/capl-manager
   newTag: dev
