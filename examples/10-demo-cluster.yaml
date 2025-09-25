@@ -1,4 +1,4 @@
-# LatitudeCluster: comece com spec vazio (ou com os campos que o CRD realmente pedir)
+# LatitudeCluster
 apiVersion: infrastructure.cluster.x-k8s.io/v1beta1
 kind: LatitudeCluster
 metadata:
@@ -39,17 +39,22 @@ spec:
       name: capl-demo-control-plane
   kubeadmConfigSpec:
     clusterConfiguration:
+      controlPlaneEndpoint: "capl-demo-api.latitude.sh:6443"
       controllerManager: {}
       scheduler: {}
     initConfiguration: {}
     joinConfiguration: {}
 ---
+# Cluster
 apiVersion: cluster.x-k8s.io/v1beta1
 kind: Cluster
 metadata:
   name: capl-demo
   namespace: default
 spec:
+  controlPlaneEndpoint:
+    host: "capl-demo-api.latitude.sh"
+    port: 6443
   infrastructureRef:
     apiVersion: infrastructure.cluster.x-k8s.io/v1beta1
     kind: LatitudeCluster
