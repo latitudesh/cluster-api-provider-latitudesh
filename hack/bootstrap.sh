@@ -217,7 +217,7 @@ echo "$ overrides OK!"
 ls -l $BASE
 
 # clusterctl init 
-echo "$ clusterctl init --infrastructure latitudesh"
+echo "$ clusterctl init --infrastructure latitudesh ..."
 
 clusterctl init \
   --core cluster-api:$PINNED_VERSION \

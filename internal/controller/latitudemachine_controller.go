@@ -2,6 +2,7 @@ package controllers
 
 import (
 	"context"
+	"encoding/base64"
 	"fmt"
 	"strings"
 	"time"
@@ -23,12 +24,15 @@ import (
 	crlog "sigs.k8s.io/controller-runtime/pkg/log"
 )
 
-// RBAC para nossos CRDs
 // +kubebuilder:rbac:groups=infrastructure.cluster.x-k8s.io,resources=latitudemachines,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=infrastructure.cluster.x-k8s.io,resources=latitudemachines/status,verbs=get;update;patch
 // +kubebuilder:rbac:groups=infrastructure.cluster.x-k8s.io,resources=latitudemachines/finalizers,verbs=update
 // +kubebuilder:rbac:groups="",resources=events,verbs=create;patch
 // +kubebuilder:rbac:groups="",resources=secrets,verbs=get;list;watch
+// +kubebuilder:rbac:groups=cluster.x-k8s.io,resources=machines;clusters;machinesets;machinedeployments,verbs=get;list;watch;update;patch
+// +kubebuilder:rbac:groups=cluster.x-k8s.io,resources=machines/status,verbs=get
+// +kubebuilder:rbac:groups=bootstrap.cluster.x-k8s.io,resources=kubeadmconfigs;kubeadmconfigtemplates,verbs=get;list;watch
+// +kubebuilder:rbac:groups="",resources=configmaps,verbs=get;list;watch
 
 const (
 	LatitudeFinalizerName = "latitudemachine.infrastructure.cluster.x-k8s.io"
@@ -45,7 +49,6 @@ func (r *LatitudeMachineReconciler) Reconcile(ctx context.Context, req ctrl.Requ
 	log := crlog.FromContext(ctx).WithValues("latitudemachine", req.NamespacedName)
 	log.Info("reconcile start")
 
-	// Buscar LatitudeMachine
 	latitudeMachine := &infrav1.LatitudeMachine{}
 	err := r.Get(ctx, req.NamespacedName, latitudeMachine)
 	if err != nil {
@@ -209,9 +212,10 @@ func (r *LatitudeMachineReconciler) reconcileServer(ctx context.Context, latitud
 		return nil, nil
 	}
 
+	encoded := base64.StdEncoding.EncodeToString([]byte(userData))
 	udID, err := r.LatitudeClient.CreateUserData(ctx, latitude.CreateUserDataRequest{
 		Name:    fmt.Sprintf("%s-%s", latitudeMachine.Name, latitudeMachine.UID),
-		Content: userData,
+		Content: encoded,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("create user-data: %w", err)
