@@ -48,6 +48,39 @@ func NewClient() (*Client, error) {
 	}, nil
 }
 
+type CreateUserDataRequest struct {
+	Name    string `json:"name"`
+	Content string `json:"content"`
+}
+
+type CreateUserDataResponse struct {
+	ID string `json:"id"`
+}
+
+func (c *Client) CreateUserData(ctx context.Context, req CreateUserDataRequest) (string, error) {
+	var resp CreateUserDataResponse
+
+	res, err := c.sdk.UserData.CreateNew(ctx, operations.PostUserDataUserDataRequestBody{
+		Data: operations.PostUserDataUserDataData{
+			Type: operations.PostUserDataUserDataTypeUserData,
+			Attributes: &operations.PostUserDataUserDataAttributes{
+				Description: req.Name,
+				Content:     req.Content,
+			},
+		},
+	})
+
+	if err != nil {
+		return "", err
+	}
+	if res.UserData != nil {
+		resp.ID = *res.UserData.Data.ID
+		return resp.ID, nil
+	}
+
+	return "", nil
+}
+
 func (c *Client) CreateServer(ctx context.Context, spec ServerSpec) (*Server, error) {
 	// Validate server spec
 	if err := c.validateServerSpec(spec); err != nil {

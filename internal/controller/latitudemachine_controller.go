@@ -2,6 +2,7 @@ package controllers
 
 import (
 	"context"
+	"encoding/base64"
 	"fmt"
 	"strings"
 	"time"
@@ -23,12 +24,15 @@ import (
 	crlog "sigs.k8s.io/controller-runtime/pkg/log"
 )
 
-// RBAC para nossos CRDs
 // +kubebuilder:rbac:groups=infrastructure.cluster.x-k8s.io,resources=latitudemachines,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=infrastructure.cluster.x-k8s.io,resources=latitudemachines/status,verbs=get;update;patch
 // +kubebuilder:rbac:groups=infrastructure.cluster.x-k8s.io,resources=latitudemachines/finalizers,verbs=update
 // +kubebuilder:rbac:groups="",resources=events,verbs=create;patch
 // +kubebuilder:rbac:groups="",resources=secrets,verbs=get;list;watch
+// +kubebuilder:rbac:groups=cluster.x-k8s.io,resources=machines;clusters;machinesets;machinedeployments,verbs=get;list;watch;update;patch
+// +kubebuilder:rbac:groups=cluster.x-k8s.io,resources=machines/status,verbs=get
+// +kubebuilder:rbac:groups=bootstrap.cluster.x-k8s.io,resources=kubeadmconfigs;kubeadmconfigtemplates,verbs=get;list;watch
+// +kubebuilder:rbac:groups="",resources=configmaps,verbs=get;list;watch
 
 const (
 	LatitudeFinalizerName = "latitudemachine.infrastructure.cluster.x-k8s.io"
@@ -45,7 +49,6 @@ func (r *LatitudeMachineReconciler) Reconcile(ctx context.Context, req ctrl.Requ
 	log := crlog.FromContext(ctx).WithValues("latitudemachine", req.NamespacedName)
 	log.Info("reconcile start")
 
-	// Buscar LatitudeMachine
 	latitudeMachine := &infrav1.LatitudeMachine{}
 	err := r.Get(ctx, req.NamespacedName, latitudeMachine)
 	if err != nil {
@@ -121,9 +124,13 @@ func (r *LatitudeMachineReconciler) reconcileNormal(ctx context.Context, latitud
 		return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
 	}
 
+	pid := fmt.Sprintf("latitude://%s", server.ID)
+
+	latitudeMachine.Spec.ProviderID = &pid
+
 	// Update machine status
 	latitudeMachine.Status.Ready = true
-	latitudeMachine.Status.ProviderID = fmt.Sprintf("latitude://%s", server.ID)
+	latitudeMachine.Status.ProviderID = pid
 	latitudeMachine.Status.ServerID = server.ID
 
 	// Set addresses if available
@@ -196,6 +203,24 @@ func (r *LatitudeMachineReconciler) reconcileServer(ctx context.Context, latitud
 		}
 	}
 
+	userData, err := r.getBootstrapUserData(ctx, latitudeMachine)
+	if err != nil {
+		return nil, err
+	}
+	if userData == "" {
+		// not ready -> caller requeue
+		return nil, nil
+	}
+
+	encoded := base64.StdEncoding.EncodeToString([]byte(userData))
+	udID, err := r.LatitudeClient.CreateUserData(ctx, latitude.CreateUserDataRequest{
+		Name:    fmt.Sprintf("%s-%s", latitudeMachine.Name, latitudeMachine.UID),
+		Content: encoded,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("create user-data: %w", err)
+	}
+
 	// Create new server
 	spec := latitude.ServerSpec{
 		Project:         r.getProjectID(latitudeMachine),
@@ -204,7 +229,8 @@ func (r *LatitudeMachineReconciler) reconcileServer(ctx context.Context, latitud
 		Site:            r.getSite(latitudeMachine),
 		Hostname:        r.getHostname(latitudeMachine),
 		SSHKeys:         latitudeMachine.Spec.SSHKeys,
-		UserData:        latitudeMachine.Spec.UserData,
+		//UserData:        latitudeMachine.Spec.UserData,
+		UserData: udID,
 	}
 
 	server, err := r.LatitudeClient.CreateServer(ctx, spec)

@@ -5,6 +5,10 @@ import (
 )
 
 type LatitudeMachineSpec struct {
+	// ProviderID is the unique identifier as specified by the cloud provider
+	// +optional
+	ProviderID *string `json:"providerID,omitempty"`
+
 	// +kubebuilder:validation:MinLength=1
 	// OperatingSystem is the operating system slug for the server
 	OperatingSystem string `json:"operatingSystem"`
