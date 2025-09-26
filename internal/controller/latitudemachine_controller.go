@@ -200,6 +200,23 @@ func (r *LatitudeMachineReconciler) reconcileServer(ctx context.Context, latitud
 		}
 	}
 
+	userData, err := r.getBootstrapUserData(ctx, latitudeMachine)
+	if err != nil {
+		return nil, err
+	}
+	if userData == "" {
+		// not ready -> caller requeue
+		return nil, nil
+	}
+
+	udID, err := r.LatitudeClient.CreateUserData(ctx, latitude.CreateUserDataRequest{
+		Name:    fmt.Sprintf("%s-%s", latitudeMachine.Name, latitudeMachine.UID),
+		Content: userData,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("create user-data: %w", err)
+	}
+
 	// Create new server
 	spec := latitude.ServerSpec{
 		Project:         r.getProjectID(latitudeMachine),
@@ -208,7 +225,8 @@ func (r *LatitudeMachineReconciler) reconcileServer(ctx context.Context, latitud
 		Site:            r.getSite(latitudeMachine),
 		Hostname:        r.getHostname(latitudeMachine),
 		SSHKeys:         latitudeMachine.Spec.SSHKeys,
-		UserData:        latitudeMachine.Spec.UserData,
+		//UserData:        latitudeMachine.Spec.UserData,
+		UserData: udID,
 	}
 
 	server, err := r.LatitudeClient.CreateServer(ctx, spec)
