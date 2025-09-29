@@ -19,7 +19,7 @@ spec:
     spec:
       projectID: "<PROJECT_ID>"
       site: "SAO2"
-      plan: "c2.smal.x86"
+      plan: "c2-small-x86"
       operatingSystem: "ubuntu_24_04_x64_lts"
       sshKeys:
       - "<SSH_KEY_ID>"
@@ -44,6 +44,60 @@ spec:
       scheduler: {}
     initConfiguration: {}
     joinConfiguration: {}
+---
+apiVersion: infrastructure.cluster.x-k8s.io/v1beta1
+kind: LatitudeMachineTemplate
+metadata:
+  name: capl-demo-md-0
+  namespace: default
+spec:
+  template:
+    spec:
+      projectID: "<PROJECT_ID>"
+      site: "SAO2"
+      plan: "c2-small-x86"
+      operatingSystem: "ubuntu_24_04_x64_lts"
+      sshKeys:
+      - "<SSH_KEY_ID>"
+---
+apiVersion: bootstrap.cluster.x-k8s.io/v1beta1
+kind: KubeadmConfigTemplate
+metadata:
+  name: capl-demo-md-0
+  namespace: default
+spec:
+  template:
+    spec:
+      joinConfiguration: {}
+---
+apiVersion: cluster.x-k8s.io/v1beta1
+kind: MachineDeployment
+metadata:
+  name: capl-demo-md-0
+  namespace: default
+spec:
+  clusterName: capl-demo
+  replicas: 2
+  selector:
+    matchLabels:
+      cluster.x-k8s.io/deployment-name: capl-demo-md-0
+  template:
+    metadata:
+      labels:
+        cluster.x-k8s.io/deployment-name: capl-demo-md-0
+        cluster.x-k8s.io/cluster-name: capl-demo
+    spec:
+      clusterName: capl-demo
+      version: v1.30.0
+      bootstrap:
+        configRef:
+          apiVersion: bootstrap.cluster.x-k8s.io/v1beta1
+          kind: KubeadmConfigTemplate
+          name: capl-demo-md-0
+      infrastructureRef:
+        apiVersion: infrastructure.cluster.x-k8s.io/v1beta1
+        kind: LatitudeMachineTemplate
+        name: capl-demo-md-0
 ---
 # Cluster
 apiVersion: cluster.x-k8s.io/v1beta1
