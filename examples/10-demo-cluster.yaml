@@ -39,11 +39,11 @@ spec:
       name: capl-demo-control-plane
   kubeadmConfigSpec:
     clusterConfiguration:
-      controlPlaneEndpoint: "{{ PUBLIC_IPV4 }}:6443"
+      controlPlaneEndpoint: "capi-endpoint:6443"
       apiServer:
         certSANs:
           - "127.0.0.1"
-          - "{{ PUBLIC_IPV4 }}"
+          - "capi-endpoint"
           - "{{ HOSTNAME }}"
         extraArgs:
           etcd-servers: "https://127.0.0.1:2379"
@@ -51,7 +51,7 @@ spec:
       scheduler: {}
     initConfiguration:
       localAPIEndpoint:
-        advertiseAddress: "{{ PUBLIC_IPV4 }}"
+        advertiseAddress: "capi-endpoint"
         bindPort: 6443
     joinConfiguration: {}
     preKubeadmCommands:
@@ -76,8 +76,9 @@ spec:
       - apt-get update
       - apt-get install -y kubelet kubeadm kubectl
       - apt-mark hold kubelet kubeadm kubectl
+      - bash -lc 'IP_CLEAN=$(ip -4 -o addr show scope global | awk "{print \$4}" | cut -d/ -f1 | head -n1); echo "KUBELET_EXTRA_ARGS=--node-ip=${IP_CLEAN}" > /etc/default/kubelet'
+      - bash -lc 'IP_CLEAN=$(ip -4 -o addr show scope global | awk "{print \$4}" | cut -d/ -f1 | head -n1); echo "${IP_CLEAN} capi-endpoint" >> /etc/hosts'
       - systemctl enable --now kubelet
-      - bash -lc 'echo "KUBELET_EXTRA_ARGS=--node-ip={{ PUBLIC_IPV4 }}" > /etc/default/kubelet'
       - systemctl daemon-reload && systemctl restart kubelet
 ---
 apiVersion: infrastructure.cluster.x-k8s.io/v1beta1
@@ -126,6 +127,7 @@ spec:
         - apt-get update
         - apt-get install -y kubelet kubeadm kubectl
         - apt-mark hold kubelet kubeadm kubectl
+        - bash -lc 'IP_CLEAN=$(ip -4 -o addr show scope global | awk "{print \$4}" | cut -d/ -f1 | head -n1); echo "KUBELET_EXTRA_ARGS=--node-ip=${IP_CLEAN}" > /etc/default/kubelet'
         - systemctl enable --now kubelet
 ---
 apiVersion: cluster.x-k8s.io/v1beta1
@@ -165,7 +167,7 @@ metadata:
   namespace: default
 spec:
   controlPlaneEndpoint:
-    host: "{{ PUBLIC_IPV4 }}"
+    host: "capi-endpoint"
     port: 6443
   infrastructureRef:
     apiVersion: infrastructure.cluster.x-k8s.io/v1beta1
