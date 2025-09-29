@@ -39,11 +39,46 @@ spec:
       name: capl-demo-control-plane
   kubeadmConfigSpec:
     clusterConfiguration:
-      controlPlaneEndpoint: "capl-demo-api.latitude.sh:6443"
+      controlPlaneEndpoint: "{{ PUBLIC_IPV4 }}:6443"
+      apiServer:
+        certSANs:
+          - "127.0.0.1"
+          - "{{ PUBLIC_IPV4 }}"
+          - "{{ HOSTNAME }}"
+        extraArgs:
+          etcd-servers: "https://127.0.0.1:2379"
       controllerManager: {}
       scheduler: {}
-    initConfiguration: {}
+    initConfiguration:
+      localAPIEndpoint:
+        advertiseAddress: "{{ PUBLIC_IPV4 }}"
+        bindPort: 6443
     joinConfiguration: {}
+    preKubeadmCommands:
+      - modprobe overlay
+      - modprobe br_netfilter
+      - sysctl -w net.bridge.bridge-nf-call-iptables=1
+      - sysctl -w net.bridge.bridge-nf-call-ip6tables=1
+      - sysctl -w net.ipv4.ip_forward=1
+      - swapoff -a
+      - sed -ri.bak "s/^[^#].*swap.*/# &/" /etc/fstab
+      # containerd
+      - apt-get update
+      - apt-get install -y containerd
+      - mkdir -p /etc/containerd
+      - bash -lc 'containerd config default > /etc/containerd/config.toml'
+      - sed -i 's/SystemdCgroup = false/SystemdCgroup = true/' /etc/containerd/config.toml
+      - systemctl enable --now containerd
+      # kubeadm/kubelet/kubectl
+      - install -m 0755 -d /etc/apt/keyrings
+      - bash -lc 'curl -fsSL https://pkgs.k8s.io/core:/stable:/v1.30/deb/Release.key | gpg --dearmor -o /etc/apt/keyrings/kubernetes-apt-keyring.gpg'
+      - bash -lc 'echo "deb [signed-by=/etc/apt/keyrings/kubernetes-apt-keyring.gpg] https://pkgs.k8s.io/core:/stable:/v1.30/deb/ /" > /etc/apt/sources.list.d/kubernetes.list'
+      - apt-get update
+      - apt-get install -y kubelet kubeadm kubectl
+      - apt-mark hold kubelet kubeadm kubectl
+      - systemctl enable --now kubelet
+      - bash -lc 'echo "KUBELET_EXTRA_ARGS=--node-ip={{ PUBLIC_IPV4 }}" > /etc/default/kubelet'
+      - systemctl daemon-reload && systemctl restart kubelet
 ---
 apiVersion: infrastructure.cluster.x-k8s.io/v1beta1
 kind: LatitudeMachineTemplate
@@ -69,6 +104,29 @@ spec:
   template:
     spec:
       joinConfiguration: {}
+      preKubeadmCommands:
+        - modprobe overlay
+        - modprobe br_netfilter
+        - sysctl -w net.bridge.bridge-nf-call-iptables=1
+        - sysctl -w net.bridge.bridge-nf-call-ip6tables=1
+        - sysctl -w net.ipv4.ip_forward=1
+        - swapoff -a
+        - sed -ri.bak "s/^[^#].*swap.*/# &/" /etc/fstab
+        # containerd
+        - apt-get update
+        - apt-get install -y containerd
+        - mkdir -p /etc/containerd
+        - bash -lc 'containerd config default > /etc/containerd/config.toml'
+        - sed -i 's/SystemdCgroup = false/SystemdCgroup = true/' /etc/containerd/config.toml
+        - systemctl enable --now containerd
+        # kubeadm/kubelet/kubectl
+        - install -m 0755 -d /etc/apt/keyrings
+        - bash -lc 'curl -fsSL https://pkgs.k8s.io/core:/stable:/v1.30/deb/Release.key | gpg --dearmor -o /etc/apt/keyrings/kubernetes-apt-keyring.gpg'
+        - bash -lc 'echo "deb [signed-by=/etc/apt/keyrings/kubernetes-apt-keyring.gpg] https://pkgs.k8s.io/core:/stable:/v1.30/deb/ /" > /etc/apt/sources.list.d/kubernetes.list'
+        - apt-get update
+        - apt-get install -y kubelet kubeadm kubectl
+        - apt-mark hold kubelet kubeadm kubectl
+        - systemctl enable --now kubelet
 ---
 apiVersion: cluster.x-k8s.io/v1beta1
 kind: MachineDeployment
@@ -107,7 +165,7 @@ metadata:
   namespace: default
 spec:
   controlPlaneEndpoint:
-    host: "capl-demo-api.latitude.sh"
+    host: "{{ PUBLIC_IPV4 }}"
     port: 6443
   infrastructureRef:
     apiVersion: infrastructure.cluster.x-k8s.io/v1beta1
