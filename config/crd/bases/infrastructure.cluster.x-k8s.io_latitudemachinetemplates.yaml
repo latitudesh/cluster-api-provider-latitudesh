@@ -41,8 +41,6 @@ spec:
             properties:
               template:
                 properties:
-                  metadata:
-                    type: object
                   spec:
                     properties:
                       operatingSystem:
@@ -56,6 +54,10 @@ spec:
                         type: string
                       projectID:
                         description: ProjectID is the Latitude.sh project ID
+                        type: string
+                      providerID:
+                        description: ProviderID is the unique identifier as specified
+                          by the cloud provider
                         type: string
                       site:
                         description: Site is the Latitude.sh site/region where the

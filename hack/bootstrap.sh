@@ -1,10 +1,16 @@
 #!/usr/bin/env bash
 
 set -euo pipefail
+
+sudo apt install -y make
+sudo snap install go --classic
+
 source "$(dirname "$0")/.env.dev"
 
 CAPL_NAMESPACE="${CAPL_NAMESPACE:-capl-dev}"
 CLUSTER_NAME="${CLUSTER_NAME:-capl-system}"
+
+PINNED_VERSION="v1.10.5"
 
 # Detect architecture
 ARCH_RAW=$(uname -m) # x86_64 | aarch64 | arm64
@@ -19,7 +25,7 @@ esac
 
 # Versions (can be overridden via env vars)
 KIND_VERSION="${KIND_VERSION:-v0.26.0}"
-KUBECTL_VERSION="${KUBECTL_VERSION:-$(curl -fsSL https://dl.k8s.io/release/stable.txt)}"
+KUBECTL_VERSION="${KUBECTL_VERSION:-v1.34.1}"
 
 install_kind() {
   if command -v kind &>/dev/null; then return; fi
@@ -58,7 +64,7 @@ install_clusterctl() {
   if command -v clusterctl &>/dev/null; then return; fi
   echo "⚠️ clusterctl not found. Installing..."
 
-  CLUSTERCTL_VERSION="${CLUSTERCTL_VERSION:-v1.11.1}"
+  CLUSTERCTL_VERSION="${CLUSTERCTL_VERSION:-$PINNED_VERSION}"
   url="https://github.com/kubernetes-sigs/cluster-api/releases/download/${CLUSTERCTL_VERSION}/clusterctl-linux-${ARCH}"
   curl -fsSL "$url" -o clusterctl
   chmod +x clusterctl
@@ -122,10 +128,7 @@ kubectl get nodes -o wide
 kubectl -n kube-system get pods
 
 # cert-manager
-CERT_MANAGER_FILE="cert-manager.crds.yaml"
-curl -L \
-  https://github.com/cert-manager/cert-manager/releases/download/v1.18.2/cert-manager.yaml \
-  -o "$CERT_MANAGER_FILE"
+CERT_MANAGER_FILE="config/certmanager/cert-manager.crds.yaml"
 
 kubectl apply -f "$CERT_MANAGER_FILE"
 kubectl -n cert-manager rollout status deploy/cert-manager --timeout=4m
@@ -146,17 +149,12 @@ fi
 
 export CAPL_VERSION="${CAPL_VERSION:-v0.1.0}"
 
-#docker build --build-arg LATITUDE_API_KEY="${LATITUDE_API_KEY:-}" -t "$STABLE_IMG" .
-#kind load docker-image "$STABLE_IMG" --name "$CLUSTER_NAME" || docker push "$STABLE_IMG"
-
 docker build --build-arg LATITUDE_API_KEY="${LATITUDE_API_KEY:-}" \
 	-t "$STABLE_IMG" \
 	-t "$IMG" \
 	.
 
 kind load docker-image "$STABLE_IMG" --name "$CLUSTER_NAME" || true
-
-#kind load docker-image "$STABLE_IMG" --name "$CLUSTER_NAME" || true
 echo "STABLE_IMG=$STABLE_IMG"
 
 # secret
@@ -169,11 +167,6 @@ kubectl -n "${CAPL_NAMESPACE}" create secret generic latitudesh-credentials \
   --from-literal=LATITUDE_API_KEY="${LATITUDE_API_KEY:-dummy-token}" \
   --from-literal=BASE_URL="${LATITUDE_BASE_URL:-https://api.latitudesh.sh}" \
   --dry-run=client -o yaml | kubectl apply -f -
-
-#kubectl -n ${CAPL_NAMESPACE} create secret generic latitudesh-credentials \
-#  --from-literal=LATITUDE_API_KEY="${LATITUDE_API_KEY:-dummy-token}" \
-#  --from-literal=BASE_URL="${LATITUDE_BASE_URL:-https://api.latitudesh.sh}" \
-#  --dry-run=client -o yaml | kubectl apply -f -
 
 command -v make >/dev/null && {
   make generate || true
@@ -201,7 +194,7 @@ kind: Metadata
 releaseSeries:
 - major: 0
   minor: 1
-  contract: v1beta2
+  contract: v1beta1
 YAML
 
 PROVIDER=infrastructure-latitudesh
@@ -224,9 +217,14 @@ echo "$ overrides OK!"
 ls -l $BASE
 
 # clusterctl init 
-echo "$ clusterctl init --infrastructure latitudesh"
+echo "$ clusterctl init --infrastructure latitudesh ..."
 
-clusterctl init --infrastructure latitudesh
+clusterctl init \
+  --core cluster-api:$PINNED_VERSION \
+  --bootstrap kubeadm:$PINNED_VERSION \
+  --control-plane kubeadm:$PINNED_VERSION \
+  --infrastructure latitudesh:v0.1.0 \
+  --wait-providers
 
 kubectl -n capi-system get deploy
 kubectl -n "$CAPL_NAMESPACE" get deploy,pods

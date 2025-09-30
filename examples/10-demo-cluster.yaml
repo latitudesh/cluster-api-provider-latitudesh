@@ -1,4 +1,4 @@
-# LatitudeCluster: comece com spec vazio (ou com os campos que o CRD realmente pedir)
+# LatitudeCluster
 apiVersion: infrastructure.cluster.x-k8s.io/v1beta1
 kind: LatitudeCluster
 metadata:
@@ -19,7 +19,7 @@ spec:
     spec:
       projectID: "<PROJECT_ID>"
       site: "SAO2"
-      plan: "c2.smal.x86"
+      plan: "c2-small-x86"
       operatingSystem: "ubuntu_24_04_x64_lts"
       sshKeys:
       - "<SSH_KEY_ID>"
@@ -39,17 +39,136 @@ spec:
       name: capl-demo-control-plane
   kubeadmConfigSpec:
     clusterConfiguration:
+      controlPlaneEndpoint: "capi-endpoint:6443"
+      apiServer:
+        certSANs:
+          - "127.0.0.1"
+          - "capi-endpoint"
+          - "{{ HOSTNAME }}"
+        extraArgs:
+          etcd-servers: "https://127.0.0.1:2379"
       controllerManager: {}
       scheduler: {}
-    initConfiguration: {}
+    initConfiguration:
+      localAPIEndpoint:
+        advertiseAddress: "capi-endpoint"
+        bindPort: 6443
     joinConfiguration: {}
+    preKubeadmCommands:
+      - modprobe overlay
+      - modprobe br_netfilter
+      - sysctl -w net.bridge.bridge-nf-call-iptables=1
+      - sysctl -w net.bridge.bridge-nf-call-ip6tables=1
+      - sysctl -w net.ipv4.ip_forward=1
+      - swapoff -a
+      - sed -ri.bak "s/^[^#].*swap.*/# &/" /etc/fstab
+      # containerd
+      - apt-get update
+      - apt-get install -y containerd
+      - mkdir -p /etc/containerd
+      - bash -lc 'containerd config default > /etc/containerd/config.toml'
+      - sed -i 's/SystemdCgroup = false/SystemdCgroup = true/' /etc/containerd/config.toml
+      - systemctl enable --now containerd
+      # kubeadm/kubelet/kubectl
+      - install -m 0755 -d /etc/apt/keyrings
+      - bash -lc 'curl -fsSL https://pkgs.k8s.io/core:/stable:/v1.30/deb/Release.key | gpg --dearmor -o /etc/apt/keyrings/kubernetes-apt-keyring.gpg'
+      - bash -lc 'echo "deb [signed-by=/etc/apt/keyrings/kubernetes-apt-keyring.gpg] https://pkgs.k8s.io/core:/stable:/v1.30/deb/ /" > /etc/apt/sources.list.d/kubernetes.list'
+      - apt-get update
+      - apt-get install -y kubelet kubeadm kubectl
+      - apt-mark hold kubelet kubeadm kubectl
+      - bash -lc 'IP_CLEAN=$(ip -4 -o addr show scope global | awk "{print \$4}" | cut -d/ -f1 | head -n1); echo "KUBELET_EXTRA_ARGS=--node-ip=${IP_CLEAN}" > /etc/default/kubelet'
+      - bash -lc 'IP_CLEAN=$(ip -4 -o addr show scope global | awk "{print \$4}" | cut -d/ -f1 | head -n1); echo "${IP_CLEAN} capi-endpoint" >> /etc/hosts'
+      - systemctl enable --now kubelet
+      - systemctl daemon-reload && systemctl restart kubelet
 ---
+apiVersion: infrastructure.cluster.x-k8s.io/v1beta1
+kind: LatitudeMachineTemplate
+metadata:
+  name: capl-demo-md-0
+  namespace: default
+spec:
+  template:
+    spec:
+      projectID: "<PROJECT_ID>"
+      site: "SAO2"
+      plan: "c2-small-x86"
+      operatingSystem: "ubuntu_24_04_x64_lts"
+      sshKeys:
+      - "<SSH_KEY_ID>"
+---
+apiVersion: bootstrap.cluster.x-k8s.io/v1beta1
+kind: KubeadmConfigTemplate
+metadata:
+  name: capl-demo-md-0
+  namespace: default
+spec:
+  template:
+    spec:
+      joinConfiguration: {}
+      preKubeadmCommands:
+        - modprobe overlay
+        - modprobe br_netfilter
+        - sysctl -w net.bridge.bridge-nf-call-iptables=1
+        - sysctl -w net.bridge.bridge-nf-call-ip6tables=1
+        - sysctl -w net.ipv4.ip_forward=1
+        - swapoff -a
+        - sed -ri.bak "s/^[^#].*swap.*/# &/" /etc/fstab
+        # containerd
+        - apt-get update
+        - apt-get install -y containerd
+        - mkdir -p /etc/containerd
+        - bash -lc 'containerd config default > /etc/containerd/config.toml'
+        - sed -i 's/SystemdCgroup = false/SystemdCgroup = true/' /etc/containerd/config.toml
+        - systemctl enable --now containerd
+        # kubeadm/kubelet/kubectl
+        - install -m 0755 -d /etc/apt/keyrings
+        - bash -lc 'curl -fsSL https://pkgs.k8s.io/core:/stable:/v1.30/deb/Release.key | gpg --dearmor -o /etc/apt/keyrings/kubernetes-apt-keyring.gpg'
+        - bash -lc 'echo "deb [signed-by=/etc/apt/keyrings/kubernetes-apt-keyring.gpg] https://pkgs.k8s.io/core:/stable:/v1.30/deb/ /" > /etc/apt/sources.list.d/kubernetes.list'
+        - apt-get update
+        - apt-get install -y kubelet kubeadm kubectl
+        - apt-mark hold kubelet kubeadm kubectl
+        - bash -lc 'IP_CLEAN=$(ip -4 -o addr show scope global | awk "{print \$4}" | cut -d/ -f1 | head -n1); echo "KUBELET_EXTRA_ARGS=--node-ip=${IP_CLEAN}" > /etc/default/kubelet'
+        - systemctl enable --now kubelet
+---
+apiVersion: cluster.x-k8s.io/v1beta1
+kind: MachineDeployment
+metadata:
+  name: capl-demo-md-0
+  namespace: default
+spec:
+  clusterName: capl-demo
+  replicas: 2
+  selector:
+    matchLabels:
+      cluster.x-k8s.io/deployment-name: capl-demo-md-0
+  template:
+    metadata:
+      labels:
+        cluster.x-k8s.io/deployment-name: capl-demo-md-0
+        cluster.x-k8s.io/cluster-name: capl-demo
+    spec:
+      clusterName: capl-demo
+      version: v1.30.0
+      bootstrap:
+        configRef:
+          apiVersion: bootstrap.cluster.x-k8s.io/v1beta1
+          kind: KubeadmConfigTemplate
+          name: capl-demo-md-0
+      infrastructureRef:
+        apiVersion: infrastructure.cluster.x-k8s.io/v1beta1
+        kind: LatitudeMachineTemplate
+        name: capl-demo-md-0
+---
+# Cluster
 apiVersion: cluster.x-k8s.io/v1beta1
 kind: Cluster
 metadata:
   name: capl-demo
   namespace: default
 spec:
+  controlPlaneEndpoint:
+    host: "capi-endpoint"
+    port: 6443
   infrastructureRef:
     apiVersion: infrastructure.cluster.x-k8s.io/v1beta1
     kind: LatitudeCluster
