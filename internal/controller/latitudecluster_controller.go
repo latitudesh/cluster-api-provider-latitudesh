@@ -134,29 +134,31 @@ func (r *LatitudeClusterReconciler) reconcileNormal(ctx context.Context, latitud
 		return ctrl.Result{RequeueAfter: 30 * time.Second}, err
 	}
 
-	// Setup control plane endpoint dynamically from first ready control plane machine
-	endpointSet, err := r.setupControlPlaneEndpoint(ctx, latitudeCluster, cluster)
-	if err != nil {
-		log.Error(err, "failed to setup control plane endpoint")
-		r.setCondition(latitudeCluster, ClusterReadyCondition, metav1.ConditionFalse, ClusterNotReadyReason, err.Error())
-		return ctrl.Result{RequeueAfter: 15 * time.Second}, nil
-	}
-
-	// If endpoint is not ready yet, wait for control plane machine to be provisioned
-	if !endpointSet {
-		log.Info("Waiting for control plane machine to be ready")
-		r.setCondition(latitudeCluster, ClusterReadyCondition, metav1.ConditionFalse, WaitingForControlPlaneReason, "Waiting for control plane machine to be provisioned and ready")
-		return ctrl.Result{RequeueAfter: 15 * time.Second}, nil
-	}
-
-	// If already ready and endpoint is set, nothing more to do
-	if latitudeCluster.Status.Ready {
+	// Mark cluster infrastructure as ready immediately after validation
+	// This allows KubeadmControlPlane to start creating machines
+	if !latitudeCluster.Status.Ready {
+		latitudeCluster.Status.Ready = true
+		r.setCondition(latitudeCluster, ClusterReadyCondition, metav1.ConditionTrue, "ClusterReady", "Cluster infrastructure is ready")
+		log.Info("Marked cluster as ready, KubeadmControlPlane can now create machines")
 		return ctrl.Result{}, nil
 	}
 
-	// Mark cluster as ready
-	latitudeCluster.Status.Ready = true
-	r.setCondition(latitudeCluster, ClusterReadyCondition, metav1.ConditionTrue, "ClusterReady", "Cluster infrastructure is ready")
+	// After cluster is ready, try to discover control plane endpoint from machines
+	// This is optional and happens asynchronously
+	endpointSet, err := r.setupControlPlaneEndpoint(ctx, latitudeCluster, cluster)
+	if err != nil {
+		log.V(1).Info("Control plane endpoint not discovered yet", "error", err)
+		// Don't return error - this is expected until machines are ready
+		return ctrl.Result{RequeueAfter: 15 * time.Second}, nil
+	}
+
+	if !endpointSet {
+		log.V(1).Info("Waiting for control plane machine to get IP address")
+		return ctrl.Result{RequeueAfter: 15 * time.Second}, nil
+	}
+
+	// Endpoint discovered successfully
+	log.Info("Control plane endpoint discovered and set")
 
 	r.recorder.Eventf(latitudeCluster, corev1.EventTypeNormal, "SuccessfulInfrastructure", "Cluster infrastructure is ready with endpoint %s:%d",
 		latitudeCluster.Status.ControlPlaneEndpoint.Host,
