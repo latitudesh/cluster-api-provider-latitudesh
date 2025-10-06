@@ -356,7 +356,7 @@ func (r *LatitudeClusterReconciler) setupControlPlaneEndpoint(ctx context.Contex
 	var externalIP string
 	for _, addr := range latitudeMachine.Status.Addresses {
 		// MachineAddress types: InternalIP, ExternalIP, InternalDNS, ExternalDNS, Hostname
-		if addr.Type == string(clusterv1.MachineExternalIP) || addr.Type == "ExternalIP" {
+		if addr.Type == clusterv1.MachineInternalIP || addr.Type == "ExternalIP" {
 			externalIP = addr.Address
 			break
 		}
@@ -365,7 +365,7 @@ func (r *LatitudeClusterReconciler) setupControlPlaneEndpoint(ctx context.Contex
 	// Fallback: if no ExternalIP, try InternalIP (for private networks)
 	if externalIP == "" {
 		for _, addr := range latitudeMachine.Status.Addresses {
-			if addr.Type == string(clusterv1.MachineInternalIP) || addr.Type == "InternalIP" {
+			if addr.Type == clusterv1.MachineInternalIP || addr.Type == "InternalIP" {
 				externalIP = addr.Address
 				log.Info("Using InternalIP as fallback", "ip", externalIP)
 				break
