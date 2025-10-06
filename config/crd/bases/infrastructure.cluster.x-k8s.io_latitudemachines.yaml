@@ -89,14 +89,23 @@ spec:
                 description: Addresses contains the addresses associated with the
                   machine
                 items:
-                  description: MachineAddress contains information about a machine's
-                    address
+                  description: MachineAddress contains information for the node's
+                    address.
                   properties:
                     address:
-                      description: Address is the actual IP address or hostname
+                      description: address is the machine address.
+                      maxLength: 256
+                      minLength: 1
                       type: string
                     type:
-                      description: Type of the address (e.g. InternalIP, ExternalIP)
+                      description: type is the machine address type, one of Hostname,
+                        ExternalIP, InternalIP, ExternalDNS or InternalDNS.
+                      enum:
+                      - Hostname
+                      - ExternalIP
+                      - InternalIP
+                      - ExternalDNS
+                      - InternalDNS
                       type: string
                   required:
                   - address
