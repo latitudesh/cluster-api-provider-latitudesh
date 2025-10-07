@@ -16,6 +16,7 @@ import (
 	infrav1 "github.com/latitudesh/cluster-api-provider-latitudesh/api/v1beta1"
 	"github.com/latitudesh/cluster-api-provider-latitudesh/internal/latitude"
 
+	clusterv1 "sigs.k8s.io/cluster-api/api/v1beta1"
 	"sigs.k8s.io/cluster-api/util/patch"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -133,15 +134,25 @@ func (r *LatitudeMachineReconciler) reconcileNormal(ctx context.Context, latitud
 	latitudeMachine.Status.ProviderID = pid
 	latitudeMachine.Status.ServerID = server.ID
 
-	// Set addresses if available
-	addresses := []infrav1.MachineAddress{}
+	addresses := []clusterv1.MachineAddress{}
+
 	for _, ip := range server.IPAddress {
-		addresses = append(addresses, infrav1.MachineAddress{
-			Type:    "ExternalIP",
+		addresses = append(addresses, clusterv1.MachineAddress{
+			Type:    clusterv1.MachineExternalIP,
 			Address: ip,
 		})
 	}
+
+	if server.Hostname != "" {
+		addresses = append(addresses, clusterv1.MachineAddress{
+			Type:    clusterv1.MachineHostName,
+			Address: server.Hostname,
+		})
+	}
+
 	latitudeMachine.Status.Addresses = addresses
+
+	log.Info("Set machine addresses", "addresses", addresses)
 
 	// Set instance ready condition
 	r.setCondition(latitudeMachine, infrav1.InstanceReadyCondition, metav1.ConditionTrue, "InstanceReady", "Instance is ready")
@@ -199,6 +210,7 @@ func (r *LatitudeMachineReconciler) reconcileServer(ctx context.Context, latitud
 				return server, nil
 			}
 			// Server exists but not ready yet
+			log.Info("Server exists but not ready", "status", server.Status)
 			return nil, nil
 		}
 	}
@@ -209,6 +221,7 @@ func (r *LatitudeMachineReconciler) reconcileServer(ctx context.Context, latitud
 	}
 	if userData == "" {
 		// not ready -> caller requeue
+		log.Info("Bootstrap user data not ready yet")
 		return nil, nil
 	}
 
@@ -229,8 +242,7 @@ func (r *LatitudeMachineReconciler) reconcileServer(ctx context.Context, latitud
 		Site:            r.getSite(latitudeMachine),
 		Hostname:        r.getHostname(latitudeMachine),
 		SSHKeys:         latitudeMachine.Spec.SSHKeys,
-		//UserData:        latitudeMachine.Spec.UserData,
-		UserData: udID,
+		UserData:        udID,
 	}
 
 	server, err := r.LatitudeClient.CreateServer(ctx, spec)

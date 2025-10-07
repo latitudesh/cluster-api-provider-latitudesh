@@ -163,6 +163,10 @@ func (c *Client) GetServer(ctx context.Context, serverID string) (*Server, error
 		}
 	}
 
+	if attrs.PrimaryIpv4 != nil {
+		server.IPAddress = append(server.IPAddress, *attrs.PrimaryIpv4)
+	}
+
 	return server, nil
 }
 

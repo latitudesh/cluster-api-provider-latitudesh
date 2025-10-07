@@ -124,6 +124,16 @@ spec:
                   - type
                   type: object
                 type: array
+              controlPlaneEndpoint:
+                description: ControlPlaneEndpoint represents the endpoint used to
+                  communicate with the control plane
+                properties:
+                  host:
+                    type: string
+                  port:
+                    format: int32
+                    type: integer
+                type: object
               ready:
                 description: Ready indicates that the cluster infrastructure is ready
                 type: boolean

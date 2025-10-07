@@ -15,6 +15,8 @@ import (
 	infrav1 "github.com/latitudesh/cluster-api-provider-latitudesh/api/v1beta1"
 	"github.com/latitudesh/cluster-api-provider-latitudesh/internal/latitude"
 
+	clusterv1 "sigs.k8s.io/cluster-api/api/v1beta1"
+	"sigs.k8s.io/cluster-api/util"
 	"sigs.k8s.io/cluster-api/util/patch"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -26,6 +28,10 @@ import (
 // +kubebuilder:rbac:groups=infrastructure.cluster.x-k8s.io,resources=latitudeclusters,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=infrastructure.cluster.x-k8s.io,resources=latitudeclusters/status,verbs=get;update;patch
 // +kubebuilder:rbac:groups=infrastructure.cluster.x-k8s.io,resources=latitudeclusters/finalizers,verbs=update
+// +kubebuilder:rbac:groups=infrastructure.cluster.x-k8s.io,resources=latitudemachines,verbs=get;list;watch
+// +kubebuilder:rbac:groups=infrastructure.cluster.x-k8s.io,resources=latitudemachines/status,verbs=get
+// +kubebuilder:rbac:groups=cluster.x-k8s.io,resources=clusters,verbs=get;list;watch
+// +kubebuilder:rbac:groups=cluster.x-k8s.io,resources=machines,verbs=get;list;watch
 // +kubebuilder:rbac:groups="",resources=events,verbs=create;patch
 
 const (
@@ -35,11 +41,14 @@ const (
 	ClusterReadyCondition = "ClusterReady"
 
 	// Condition reasons
-	ClusterProvisionFailedReason   = "ClusterProvisionFailed"
-	ClusterNotReadyReason          = "ClusterNotReady"
-	ClusterDeletionFailedReason    = "ClusterDeletionFailed"
-	WaitingForInfrastructureReason = "WaitingForInfrastructure"
-	InvalidClusterConfigReason     = "InvalidClusterConfig"
+	ClusterProvisionFailedReason       = "ClusterProvisionFailed"
+	ClusterNotReadyReason              = "ClusterNotReady"
+	ClusterDeletionFailedReason        = "ClusterDeletionFailed"
+	WaitingForInfrastructureReason     = "WaitingForInfrastructure"
+	WaitingForControlPlaneReason       = "WaitingForControlPlane"
+	InvalidClusterConfigReason         = "InvalidClusterConfig"
+	ControlPlaneEndpointSetReason      = "ControlPlaneEndpointSet"
+	ControlPlaneEndpointNotReadyReason = "ControlPlaneEndpointNotReady"
 )
 
 type LatitudeClusterReconciler struct {
@@ -63,6 +72,19 @@ func (r *LatitudeClusterReconciler) Reconcile(ctx context.Context, req ctrl.Requ
 		return ctrl.Result{}, err
 	}
 
+	// Get the owner Cluster
+	cluster, err := util.GetOwnerCluster(ctx, r.Client, latitudeCluster.ObjectMeta)
+	if err != nil {
+		log.Error(err, "failed to get owner Cluster")
+		return ctrl.Result{}, err
+	}
+	if cluster == nil {
+		log.Info("Cluster Controller has not yet set OwnerRef")
+		return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
+	}
+
+	log = log.WithValues("cluster", cluster.Name)
+
 	// Initialize the patch helper
 	patchHelper, err := patch.NewHelper(latitudeCluster, r.Client)
 	if err != nil {
@@ -85,10 +107,10 @@ func (r *LatitudeClusterReconciler) Reconcile(ctx context.Context, req ctrl.Requ
 	}
 
 	// Handle non-deleted clusters
-	return r.reconcileNormal(ctx, latitudeCluster)
+	return r.reconcileNormal(ctx, latitudeCluster, cluster)
 }
 
-func (r *LatitudeClusterReconciler) reconcileNormal(ctx context.Context, latitudeCluster *infrav1.LatitudeCluster) (ctrl.Result, error) {
+func (r *LatitudeClusterReconciler) reconcileNormal(ctx context.Context, latitudeCluster *infrav1.LatitudeCluster, cluster *clusterv1.Cluster) (ctrl.Result, error) {
 	log := crlog.FromContext(ctx)
 
 	// Add finalizer if not present
@@ -97,19 +119,14 @@ func (r *LatitudeClusterReconciler) reconcileNormal(ctx context.Context, latitud
 		return ctrl.Result{}, nil
 	}
 
-	// If already ready, do nothing
-	if latitudeCluster.Status.Ready {
-		return ctrl.Result{}, nil
-	}
-
 	// Validate cluster specification
 	if err := r.validateClusterSpec(latitudeCluster); err != nil {
 		log.Info("Invalid cluster spec", "error", err)
-		r.setCondition(latitudeCluster, ClusterReadyCondition, metav1.ConditionFalse, ClusterProvisionFailedReason, err.Error())
+		r.setCondition(latitudeCluster, ClusterReadyCondition, metav1.ConditionFalse, InvalidClusterConfigReason, err.Error())
 		return ctrl.Result{}, nil
 	}
 
-	// Reconcile cluster infrastructure
+	// Reconcile cluster infrastructure (networks, firewalls, etc)
 	if err := r.reconcileInfrastructure(ctx, latitudeCluster); err != nil {
 		log.Error(err, "failed to reconcile cluster infrastructure")
 		r.setCondition(latitudeCluster, ClusterReadyCondition, metav1.ConditionFalse, ClusterProvisionFailedReason, err.Error())
@@ -117,17 +134,37 @@ func (r *LatitudeClusterReconciler) reconcileNormal(ctx context.Context, latitud
 		return ctrl.Result{RequeueAfter: 30 * time.Second}, err
 	}
 
-	// Setup control plane endpoint if specified
-	// if latitudeCluster.Spec.ControlPlaneEndpoint.Host != "" {
-	// 	latitudeCluster.Status.ControlPlaneEndpoint = latitudeCluster.Spec.ControlPlaneEndpoint
-	// }
+	// Mark cluster infrastructure as ready immediately after validation
+	// This allows KubeadmControlPlane to start creating machines
+	if !latitudeCluster.Status.Ready {
+		latitudeCluster.Status.Ready = true
+		r.setCondition(latitudeCluster, ClusterReadyCondition, metav1.ConditionTrue, "ClusterReady", "Cluster infrastructure is ready")
+		log.Info("Marked cluster as ready, KubeadmControlPlane can now create machines")
+		return ctrl.Result{}, nil
+	}
 
-	// Mark cluster as ready
-	latitudeCluster.Status.Ready = true
-	r.setCondition(latitudeCluster, ClusterReadyCondition, metav1.ConditionTrue, "ClusterReady", "Cluster infrastructure is ready")
+	// After cluster is ready, try to discover control plane endpoint from machines
+	// This is optional and happens asynchronously
+	endpointSet, err := r.setupControlPlaneEndpoint(ctx, latitudeCluster, cluster)
+	if err != nil {
+		log.V(1).Info("Control plane endpoint not discovered yet", "error", err)
+		// Don't return error - this is expected until machines are ready
+		return ctrl.Result{RequeueAfter: 15 * time.Second}, nil
+	}
 
-	r.recorder.Eventf(latitudeCluster, corev1.EventTypeNormal, "SuccessfulInfrastructure", "Cluster infrastructure is ready")
-	log.Info("Successfully reconciled LatitudeCluster")
+	if !endpointSet {
+		log.V(1).Info("Waiting for control plane machine to get IP address")
+		return ctrl.Result{RequeueAfter: 15 * time.Second}, nil
+	}
+
+	// Endpoint discovered successfully
+	log.Info("Control plane endpoint discovered and set")
+
+	r.recorder.Eventf(latitudeCluster, corev1.EventTypeNormal, "SuccessfulInfrastructure", "Cluster infrastructure is ready with endpoint %s:%d",
+		latitudeCluster.Status.ControlPlaneEndpoint.Host,
+		latitudeCluster.Status.ControlPlaneEndpoint.Port)
+	log.Info("Successfully reconciled LatitudeCluster",
+		"endpoint", fmt.Sprintf("%s:%d", latitudeCluster.Status.ControlPlaneEndpoint.Host, latitudeCluster.Status.ControlPlaneEndpoint.Port))
 
 	return ctrl.Result{}, nil
 }
@@ -164,12 +201,7 @@ func (r *LatitudeClusterReconciler) validateClusterSpec(latitudeCluster *infrav1
 		errors = append(errors, "projectRef.projectID is required")
 	}
 
-	// Validate control plane endpoint if specified
-	// if latitudeCluster.Spec.ControlPlaneEndpoint.Host != "" {
-	// 	if latitudeCluster.Spec.ControlPlaneEndpoint.Port <= 0 {
-	// 		errors = append(errors, "controlPlaneEndpoint.port must be greater than 0 when host is specified")
-	// 	}
-	// }
+	// Control plane endpoint will be set dynamically, so we don't validate it here
 
 	if len(errors) > 0 {
 		return fmt.Errorf("validation failed: %s", strings.Join(errors, ", "))
@@ -203,7 +235,7 @@ func (r *LatitudeClusterReconciler) reconcileInfrastructure(ctx context.Context,
 	// TODO: Implement additional infrastructure setup if needed:
 	// - Create private networks
 	// - Setup firewalls
-	// - Configure load balancers
+	// - Configure load balancers (if supported)
 	// - Prepare SSH keys
 
 	return nil
@@ -215,7 +247,7 @@ func (r *LatitudeClusterReconciler) cleanupInfrastructure(ctx context.Context, l
 	// TODO: Implement infrastructure cleanup:
 	// - Remove private networks
 	// - Cleanup firewalls
-	// - Remove load balancers
+	// - Remove load balancers (if created)
 	// - Cleanup SSH keys if created
 
 	log.Info("Cluster infrastructure cleanup completed")
@@ -234,13 +266,136 @@ func (r *LatitudeClusterReconciler) setCondition(latitudeCluster *infrav1.Latitu
 	// Find existing condition
 	for i, existingCondition := range latitudeCluster.Status.Conditions {
 		if existingCondition.Type == conditionType {
-			latitudeCluster.Status.Conditions[i] = condition
+			// Only update if status or reason changed to avoid unnecessary updates
+			if existingCondition.Status != status || existingCondition.Reason != reason {
+				latitudeCluster.Status.Conditions[i] = condition
+			}
 			return
 		}
 	}
 
 	// Add new condition
 	latitudeCluster.Status.Conditions = append(latitudeCluster.Status.Conditions, condition)
+}
+
+// setupControlPlaneEndpoint discovers the first ready control plane machine and sets the endpoint
+// Returns (endpointSet bool, error)
+func (r *LatitudeClusterReconciler) setupControlPlaneEndpoint(ctx context.Context, latitudeCluster *infrav1.LatitudeCluster, cluster *clusterv1.Cluster) (bool, error) {
+	log := crlog.FromContext(ctx)
+
+	// If control plane endpoint is already set, nothing to do
+	if latitudeCluster.Status.ControlPlaneEndpoint.Host != "" {
+		log.V(1).Info("Control plane endpoint already set",
+			"host", latitudeCluster.Status.ControlPlaneEndpoint.Host,
+			"port", latitudeCluster.Status.ControlPlaneEndpoint.Port)
+		return true, nil
+	}
+
+	// List all CAPI Machines that belong to this cluster
+	machineList := &clusterv1.MachineList{}
+	if err := r.List(ctx, machineList,
+		client.InNamespace(cluster.Namespace),
+		client.MatchingLabels{
+			clusterv1.ClusterNameLabel: cluster.Name,
+		}); err != nil {
+		return false, fmt.Errorf("failed to list CAPI machines: %w", err)
+	}
+
+	if len(machineList.Items) == 0 {
+		log.Info("No machines found yet, waiting for machine controller to create them")
+		return false, nil
+	}
+
+	// Find the first control plane machine that has an InfrastructureRef
+	var controlPlaneMachine *clusterv1.Machine
+	for i := range machineList.Items {
+		machine := &machineList.Items[i]
+		if util.IsControlPlaneMachine(machine) {
+			controlPlaneMachine = machine
+			log.Info("Found control plane machine",
+				"machine", machine.Name,
+				"phase", machine.Status.Phase)
+			break
+		}
+	}
+
+	if controlPlaneMachine == nil {
+		log.Info("No control plane machine found yet")
+		return false, nil
+	}
+
+	// Get the LatitudeMachine referenced by the control plane Machine
+	if controlPlaneMachine.Spec.InfrastructureRef.Name == "" {
+		log.Info("Control plane machine has no infrastructure ref yet")
+		return false, nil
+	}
+
+	latitudeMachine := &infrav1.LatitudeMachine{}
+	latitudeMachineKey := client.ObjectKey{
+		Namespace: controlPlaneMachine.Spec.InfrastructureRef.Namespace,
+		Name:      controlPlaneMachine.Spec.InfrastructureRef.Name,
+	}
+
+	if err := r.Get(ctx, latitudeMachineKey, latitudeMachine); err != nil {
+		if apierrors.IsNotFound(err) {
+			log.Info("LatitudeMachine not found yet", "key", latitudeMachineKey)
+			return false, nil
+		}
+		return false, fmt.Errorf("failed to get LatitudeMachine: %w", err)
+	}
+
+	// Check if the LatitudeMachine is ready and has an IP address
+	if !latitudeMachine.Status.Ready {
+		log.Info("LatitudeMachine is not ready yet",
+			"machine", latitudeMachine.Name,
+			"ready", latitudeMachine.Status.Ready)
+		return false, nil
+	}
+
+	// Find an external IP address
+	var externalIP string
+	for _, addr := range latitudeMachine.Status.Addresses {
+		// MachineAddress types: InternalIP, ExternalIP, InternalDNS, ExternalDNS, Hostname
+		if addr.Type == clusterv1.MachineInternalIP || addr.Type == "ExternalIP" {
+			externalIP = addr.Address
+			break
+		}
+	}
+
+	// Fallback: if no ExternalIP, try InternalIP (for private networks)
+	if externalIP == "" {
+		for _, addr := range latitudeMachine.Status.Addresses {
+			if addr.Type == clusterv1.MachineInternalIP || addr.Type == "InternalIP" {
+				externalIP = addr.Address
+				log.Info("Using InternalIP as fallback", "ip", externalIP)
+				break
+			}
+		}
+	}
+
+	if externalIP == "" {
+		log.Info("LatitudeMachine is ready but has no external IP yet", "machine", latitudeMachine.Name)
+		return false, fmt.Errorf("control plane machine %s has no external IP address", latitudeMachine.Name)
+	}
+
+	// Set the control plane endpoint
+	latitudeCluster.Status.ControlPlaneEndpoint = infrav1.APIEndpoint{
+		Host: externalIP,
+		Port: 6443, // Default Kubernetes API server port
+	}
+
+	log.Info("Successfully set control plane endpoint",
+		"host", externalIP,
+		"port", 6443,
+		"from-machine", latitudeMachine.Name)
+
+	r.setCondition(latitudeCluster, ClusterReadyCondition, metav1.ConditionFalse, ControlPlaneEndpointSetReason,
+		fmt.Sprintf("Control plane endpoint set to %s:6443", externalIP))
+
+	r.recorder.Eventf(latitudeCluster, corev1.EventTypeNormal, "ControlPlaneEndpointSet",
+		"Control plane endpoint set to %s:6443 from machine %s", externalIP, latitudeMachine.Name)
+
+	return true, nil
 }
 
 func (r *LatitudeClusterReconciler) SetupWithManager(mgr ctrl.Manager) error {

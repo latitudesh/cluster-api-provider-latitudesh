@@ -2,6 +2,7 @@ package v1beta1
 
 import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	clusterv1 "sigs.k8s.io/cluster-api/api/v1beta1"
 )
 
 type LatitudeMachineSpec struct {
@@ -45,20 +46,11 @@ type LatitudeMachineStatus struct {
 
 	// Addresses contains the addresses associated with the machine
 	// +optional
-	Addresses []MachineAddress `json:"addresses,omitempty"`
+	Addresses []clusterv1.MachineAddress `json:"addresses,omitempty"`
 
 	// Conditions defines current service state of the LatitudeMachine
 	// +optional
 	Conditions []metav1.Condition `json:"conditions,omitempty"`
-}
-
-// MachineAddress contains information about a machine's address
-type MachineAddress struct {
-	// Type of the address (e.g. InternalIP, ExternalIP)
-	Type string `json:"type"`
-
-	// Address is the actual IP address or hostname
-	Address string `json:"address"`
 }
 
 // +kubebuilder:object:root=true
