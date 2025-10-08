@@ -17,6 +17,7 @@ import (
 	"github.com/latitudesh/cluster-api-provider-latitudesh/internal/latitude"
 
 	clusterv1 "sigs.k8s.io/cluster-api/api/v1beta1"
+	capiutil "sigs.k8s.io/cluster-api/util"
 	"sigs.k8s.io/cluster-api/util/patch"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -104,7 +105,7 @@ func (r *LatitudeMachineReconciler) reconcileNormal(ctx context.Context, latitud
 	}
 
 	// Check if we have required fields
-	if err := r.validateMachineSpec(latitudeMachine); err != nil {
+	if err := r.validateMachineSpec(ctx, latitudeMachine); err != nil {
 		log.Info("Invalid machine spec", "error", err)
 		r.setCondition(latitudeMachine, infrav1.InstanceReadyCondition, metav1.ConditionFalse, infrav1.InstanceProvisionFailedReason, err.Error())
 		return ctrl.Result{}, nil
@@ -236,10 +237,10 @@ func (r *LatitudeMachineReconciler) reconcileServer(ctx context.Context, latitud
 
 	// Create new server
 	spec := latitude.ServerSpec{
-		Project:         r.getProjectID(latitudeMachine),
+		Project:         r.getProjectID(ctx, latitudeMachine),
 		Plan:            latitudeMachine.Spec.Plan,
 		OperatingSystem: latitudeMachine.Spec.OperatingSystem,
-		Site:            r.getSite(latitudeMachine),
+		Site:            r.getSite(ctx, latitudeMachine),
 		Hostname:        r.getHostname(latitudeMachine),
 		SSHKeys:         latitudeMachine.Spec.SSHKeys,
 		UserData:        udID,
@@ -260,7 +261,7 @@ func (r *LatitudeMachineReconciler) reconcileServer(ctx context.Context, latitud
 	return nil, nil
 }
 
-func (r *LatitudeMachineReconciler) validateMachineSpec(latitudeMachine *infrav1.LatitudeMachine) error {
+func (r *LatitudeMachineReconciler) validateMachineSpec(ctx context.Context, latitudeMachine *infrav1.LatitudeMachine) error {
 	var errors []string
 
 	if latitudeMachine.Spec.OperatingSystem == "" {
@@ -269,10 +270,10 @@ func (r *LatitudeMachineReconciler) validateMachineSpec(latitudeMachine *infrav1
 	if latitudeMachine.Spec.Plan == "" {
 		errors = append(errors, "plan is required")
 	}
-	if r.getProjectID(latitudeMachine) == "" {
+	if r.getProjectID(ctx, latitudeMachine) == "" {
 		errors = append(errors, "projectID is required")
 	}
-	if r.getSite(latitudeMachine) == "" {
+	if r.getSite(ctx, latitudeMachine) == "" {
 		errors = append(errors, "site is required")
 	}
 
@@ -282,20 +283,59 @@ func (r *LatitudeMachineReconciler) validateMachineSpec(latitudeMachine *infrav1
 	return nil
 }
 
-func (r *LatitudeMachineReconciler) getProjectID(latitudeMachine *infrav1.LatitudeMachine) string {
-	if latitudeMachine.Spec.ProjectID != "" {
-		return latitudeMachine.Spec.ProjectID
+func (r *LatitudeMachineReconciler) getProjectID(ctx context.Context, latitudeMachine *infrav1.LatitudeMachine) string {
+	cluster, err := r.getLatitudeCluster(ctx, latitudeMachine)
+	if err != nil {
+		return ""
 	}
-	// TODO: Get from LatitudeCluster if available
+	if cluster.Spec.ProjectRef != nil {
+		return cluster.Spec.ProjectRef.ProjectID
+	}
 	return ""
 }
 
-func (r *LatitudeMachineReconciler) getSite(latitudeMachine *infrav1.LatitudeMachine) string {
-	if latitudeMachine.Spec.Site != "" {
-		return latitudeMachine.Spec.Site
+func (r *LatitudeMachineReconciler) getSite(ctx context.Context, latitudeMachine *infrav1.LatitudeMachine) string {
+	cluster, err := r.getLatitudeCluster(ctx, latitudeMachine)
+	if err != nil {
+		return ""
 	}
-	// TODO: Get from LatitudeCluster if available
-	return ""
+	return cluster.Spec.Location
+}
+
+func (r *LatitudeMachineReconciler) getLatitudeCluster(ctx context.Context, latitudeMachine *infrav1.LatitudeMachine) (*infrav1.LatitudeCluster, error) {
+	log := crlog.FromContext(ctx)
+
+	// Get owner Machine
+	ownerMachine, err := capiutil.GetOwnerMachine(ctx, r.Client, latitudeMachine.ObjectMeta)
+	if err != nil {
+		return nil, fmt.Errorf("get owner Machine: %w", err)
+	}
+	if ownerMachine == nil {
+		log.Info("Owner Machine not definied; requeue")
+		return nil, nil
+	}
+
+	// Get cluster from Machine
+	cluster, err := capiutil.GetClusterFromMetadata(ctx, r.Client, ownerMachine.ObjectMeta)
+	if err != nil {
+		return nil, fmt.Errorf("get cluster from Machine: %w", err)
+	}
+	if cluster == nil {
+		log.Info("Cluster not definied; requeue")
+		return nil, nil
+	}
+
+	// Get LatitudeCluster
+	latitudeCluster := &infrav1.LatitudeCluster{}
+	key := client.ObjectKey{
+		Namespace: cluster.Namespace,
+		Name:      cluster.Spec.InfrastructureRef.Name,
+	}
+	if err := r.Client.Get(ctx, key, latitudeCluster); err != nil {
+		return nil, fmt.Errorf("get LatitudeCluster: %w", err)
+	}
+
+	return latitudeCluster, nil
 }
 
 func (r *LatitudeMachineReconciler) getHostname(latitudeMachine *infrav1.LatitudeMachine) string {
