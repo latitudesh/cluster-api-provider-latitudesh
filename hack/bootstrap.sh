@@ -158,6 +158,13 @@ kind load docker-image "$STABLE_IMG" --name "$CLUSTER_NAME" || true
 echo "STABLE_IMG=$STABLE_IMG"
 
 # secret
+if [[ -z "${LATITUDE_API_KEY:-}" ]]; then
+  echo "⚠️  LATITUDE_API_KEY not set - using dummy token"
+  echo "   Set it in hack/.env.dev for real testing"
+
+  exit 1
+fi
+
 kubectl get ns "${CAPL_NAMESPACE}" >/dev/null 2>&1 || kubectl create ns "${CAPL_NAMESPACE}"
 
 BASE_URL="https://api.latitudesh.sh"
@@ -230,3 +237,9 @@ kubectl -n capi-system get deploy
 kubectl -n "$CAPL_NAMESPACE" get deploy,pods
 
 kubectl -n "$CAPL_NAMESPACE" rollout status deploy/capl-controller-manager --timeout=5m
+
+echo
+echo "🏁 Bootstrap finished!"
+echo
+echo "Create a demo cluster using:"
+echo "  kubectl apply -f examples/10-demo-cluster.yaml"
