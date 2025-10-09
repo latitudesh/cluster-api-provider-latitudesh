@@ -18,12 +18,6 @@ type LatitudeMachineSpec struct {
 	// Plan is the server plan slug
 	Plan string `json:"plan"`
 
-	// Site is the Latitude.sh site/region where the server will be deployed
-	Site string `json:"site,omitempty"`
-
-	// ProjectID is the Latitude.sh project ID
-	ProjectID string `json:"projectID,omitempty"`
-
 	// SSHKeys is a list of SSH key IDs to be installed on the server
 	SSHKeys []string `json:"sshKeys,omitempty"`
 
