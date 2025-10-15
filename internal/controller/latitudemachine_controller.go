@@ -295,10 +295,24 @@ func (r *LatitudeMachineReconciler) getProjectID(ctx context.Context, latitudeMa
 }
 
 func (r *LatitudeMachineReconciler) getSite(ctx context.Context, latitudeMachine *infrav1.LatitudeMachine) string {
+	log := crlog.FromContext(ctx)
+
+	// Get Owner Machine
+	ownerMachine, err := capiutil.GetOwnerMachine(ctx, r.Client, latitudeMachine.ObjectMeta)
+	if err != nil {
+		log.Error(err, "failed to get owner Machine")
+		return ""
+	}
+
+	if ownerMachine != nil && ownerMachine.Spec.FailureDomain != nil {
+		return *ownerMachine.Spec.FailureDomain
+	}
+
 	cluster, err := r.getLatitudeCluster(ctx, latitudeMachine)
 	if err != nil {
 		return ""
 	}
+
 	return cluster.Spec.Location
 }
 
