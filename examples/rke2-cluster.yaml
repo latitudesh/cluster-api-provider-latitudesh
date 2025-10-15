@@ -1,0 +1,150 @@
+---
+# Complete cluster with 1 control plane node and 2 worker nodes using RKE2
+apiVersion: cluster.x-k8s.io/v1beta1
+kind: Cluster
+metadata:
+  name: my-cluster
+  namespace: default
+spec:
+  clusterNetwork:
+    pods:
+      cidrBlocks: ["10.244.0.0/16"]
+    services:
+      cidrBlocks: ["10.96.0.0/12"]
+  controlPlaneEndpoint:
+    host: capi-endpoint  # CHANGE THIS: Your DNS name for control plane
+    port: 6443
+  controlPlaneRef:
+    apiVersion: controlplane.cluster.x-k8s.io/v1beta1
+    kind: RKE2ControlPlane
+    name: my-cluster-control-plane
+  infrastructureRef:
+    apiVersion: infrastructure.cluster.x-k8s.io/v1beta1
+    kind: LatitudeCluster
+    name: my-cluster
+---
+apiVersion: infrastructure.cluster.x-k8s.io/v1beta1
+kind: LatitudeCluster
+metadata:
+  name: my-cluster
+  namespace: default
+spec:
+  location: "SAO2"  # CHANGE THIS: Your preferred Latitude.sh location (https://www.latitude.sh/locations)
+  projectRef:
+    projectID: "<PROJECT_ID>"  # CHANGE THIS: Your Latitude.sh project ID
+---
+# Control Plane Machine Template
+apiVersion: infrastructure.cluster.x-k8s.io/v1beta1
+kind: LatitudeMachineTemplate
+metadata:
+  name: my-cluster-control-plane
+  namespace: default
+spec:
+  template:
+    spec:
+      plan: "c2-small-x86"  # CHANGE THIS: Your preferred plan
+      operatingSystem: "ubuntu_24_04_x64_lts"
+      sshKeys: ["<SSH_KEY_ID>"]  # CHANGE THIS: Your SSH key ID
+---
+# RKE2 Control Plane Configuration
+apiVersion: controlplane.cluster.x-k8s.io/v1beta1
+kind: RKE2ControlPlane
+metadata:
+  name: my-cluster-control-plane
+  namespace: default
+spec:
+  replicas: 1
+  version: v1.30.0+rke2r1
+  infrastructureRef:
+    apiVersion: infrastructure.cluster.x-k8s.io/v1beta1
+    kind: LatitudeMachineTemplate
+    name: my-cluster-control-plane
+  agentConfig:
+    nodeName: '{{ ds.meta_data.hostname }}'
+  serverConfig:
+    cni: calico  # RKE2 installs and configures automatically
+    tlsSan:
+      - capi-endpoint  # CHANGE THIS: Your DNS name
+      - 127.0.0.1
+  registrationMethod: internal-first
+  rolloutStrategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+  preRKE2Commands:
+    # Only essential firewall rules - RKE2 handles the rest
+    - ufw --force enable
+    - ufw default deny incoming
+    - ufw default allow outgoing
+    - ufw allow 22/tcp
+    - ufw allow 6443/tcp      # Kubernetes API
+    - ufw allow 9345/tcp      # RKE2 supervisor API
+    - ufw allow 2379:2380/tcp # etcd
+    - ufw allow 10250/tcp     # kubelet
+    - ufw allow 4789/udp      # VXLAN
+    - ufw --force enable
+---
+# Worker Node Machine Template
+apiVersion: infrastructure.cluster.x-k8s.io/v1beta1
+kind: LatitudeMachineTemplate
+metadata:
+  name: my-cluster-md-0
+  namespace: default
+spec:
+  template:
+    spec:
+      plan: "c2-small-x86"  # CHANGE THIS: Your preferred plan for workers
+      operatingSystem: "ubuntu_24_04_x64_lts"
+      sshKeys: ["<SSH_KEY_ID>"]  # CHANGE THIS: Your SSH key ID
+---
+# Worker Node RKE2 Bootstrap Configuration
+apiVersion: bootstrap.cluster.x-k8s.io/v1beta1
+kind: RKE2ConfigTemplate
+metadata:
+  name: my-cluster-md-0
+  namespace: default
+spec:
+  template:
+    spec:
+      agentConfig:
+        nodeName: '{{ ds.meta_data.hostname }}'
+      preRKE2Commands:
+        # Only essential firewall rules
+        - ufw --force enable
+        - ufw default deny incoming
+        - ufw default allow outgoing
+        - ufw allow 22/tcp
+        - ufw allow 10250/tcp        # kubelet
+        - ufw allow 4789/udp         # VXLAN
+        - ufw allow 30000:32767/tcp  # NodePort range
+        - ufw --force enable
+---
+# Worker Node Deployment
+apiVersion: cluster.x-k8s.io/v1beta1
+kind: MachineDeployment
+metadata:
+  name: my-cluster-md-0
+  namespace: default
+spec:
+  clusterName: my-cluster
+  replicas: 2
+  selector:
+    matchLabels:
+      cluster.x-k8s.io/deployment-name: my-cluster-md-0
+  template:
+    metadata:
+      labels:
+        cluster.x-k8s.io/deployment-name: my-cluster-md-0
+        cluster.x-k8s.io/cluster-name: my-cluster
+    spec:
+      clusterName: my-cluster
+      version: v1.30.0+rke2r1
+      bootstrap:
+        configRef:
+          apiVersion: bootstrap.cluster.x-k8s.io/v1beta1
+          kind: RKE2ConfigTemplate
+          name: my-cluster-md-0
+      infrastructureRef:
+        apiVersion: infrastructure.cluster.x-k8s.io/v1beta1
+        kind: LatitudeMachineTemplate
+        name: my-cluster-md-0
