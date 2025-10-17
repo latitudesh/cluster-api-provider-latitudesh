@@ -228,8 +228,8 @@ echo "$ clusterctl init --infrastructure latitudesh ..."
 
 clusterctl init \
   --core cluster-api:$PINNED_VERSION \
-  --bootstrap kubeadm:$PINNED_VERSION \
-  --control-plane kubeadm:$PINNED_VERSION \
+  --bootstrap kubeadm:$PINNED_VERSION,rke2:v0.20.0 \
+  --control-plane kubeadm:$PINNED_VERSION,rke2:v0.20.0 \
   --infrastructure latitudesh:v0.1.0 \
   --wait-providers
 
