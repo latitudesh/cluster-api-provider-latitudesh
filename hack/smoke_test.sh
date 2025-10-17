@@ -15,9 +15,6 @@ spec:
   site: "ASH" 
   sshKeys:
     - "sua-ssh-key-id"
-  userData: |
-    #!/bin/bash
-    echo "Hello from Latitude.sh!" > /tmp/hello.txt
 YAML
 
 kubectl apply -f /tmp/lat-machine-smoke.yaml

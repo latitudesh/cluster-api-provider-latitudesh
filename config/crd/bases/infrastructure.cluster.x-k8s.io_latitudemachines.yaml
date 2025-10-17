@@ -68,10 +68,6 @@ spec:
                 items:
                   type: string
                 type: array
-              userData:
-                description: UserData is cloud-init user data to be applied to the
-                  server
-                type: string
             required:
             - operatingSystem
             - plan

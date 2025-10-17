@@ -3,6 +3,7 @@ package controllers
 import (
 	"context"
 	"encoding/base64"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -15,6 +16,7 @@ import (
 
 	infrav1 "github.com/latitudesh/cluster-api-provider-latitudesh/api/v1beta1"
 	"github.com/latitudesh/cluster-api-provider-latitudesh/internal/latitude"
+	"github.com/latitudesh/cluster-api-provider-latitudesh/internal/scope"
 
 	clusterv1 "sigs.k8s.io/cluster-api/api/v1beta1"
 	capiutil "sigs.k8s.io/cluster-api/util"
@@ -104,6 +106,27 @@ func (r *LatitudeMachineReconciler) reconcileNormal(ctx context.Context, latitud
 		return ctrl.Result{}, nil
 	}
 
+	// Get owner machine
+	ownerMachine, err := capiutil.GetOwnerMachine(ctx, r.Client, latitudeMachine.ObjectMeta)
+	if err != nil {
+		return ctrl.Result{}, fmt.Errorf("failed to get owner machine: %w", err)
+	}
+	if ownerMachine == nil {
+		log.Info("Owner machine not found yet, waiting")
+		return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
+	}
+
+	// Create machine scope
+	machineScope, err := scope.NewMachineScope(scope.MachineScopeParams{
+		Client:          r.Client,
+		Logger:          log,
+		Machine:         ownerMachine,
+		LatitudeMachine: latitudeMachine,
+	})
+	if err != nil {
+		return ctrl.Result{}, fmt.Errorf("failed to create machine scope: %w", err)
+	}
+
 	// Check if we have required fields
 	if err := r.validateMachineSpec(ctx, latitudeMachine); err != nil {
 		log.Info("Invalid machine spec", "error", err)
@@ -112,7 +135,7 @@ func (r *LatitudeMachineReconciler) reconcileNormal(ctx context.Context, latitud
 	}
 
 	// Create or get server from Latitude.sh
-	server, err := r.reconcileServer(ctx, latitudeMachine, patchHelper)
+	server, err := r.reconcileServer(ctx, machineScope, patchHelper)
 	if err != nil {
 		log.Error(err, "failed to reconcile server")
 		r.setCondition(latitudeMachine, infrav1.InstanceReadyCondition, metav1.ConditionFalse, infrav1.InstanceProvisionFailedReason, err.Error())
@@ -127,16 +150,13 @@ func (r *LatitudeMachineReconciler) reconcileNormal(ctx context.Context, latitud
 	}
 
 	pid := fmt.Sprintf("latitude://%s", server.ID)
-
-	latitudeMachine.Spec.ProviderID = &pid
+	machineScope.SetProviderID(pid)
 
 	// Update machine status
-	latitudeMachine.Status.Ready = true
-	latitudeMachine.Status.ProviderID = pid
+	machineScope.SetReady()
 	latitudeMachine.Status.ServerID = server.ID
 
 	addresses := []clusterv1.MachineAddress{}
-
 	for _, ip := range server.IPAddress {
 		addresses = append(addresses, clusterv1.MachineAddress{
 			Type:    clusterv1.MachineExternalIP,
@@ -152,7 +172,6 @@ func (r *LatitudeMachineReconciler) reconcileNormal(ctx context.Context, latitud
 	}
 
 	latitudeMachine.Status.Addresses = addresses
-
 	log.Info("Set machine addresses", "addresses", addresses)
 
 	// Set instance ready condition
@@ -186,8 +205,9 @@ func (r *LatitudeMachineReconciler) reconcileDelete(ctx context.Context, latitud
 	return ctrl.Result{}, nil
 }
 
-func (r *LatitudeMachineReconciler) reconcileServer(ctx context.Context, latitudeMachine *infrav1.LatitudeMachine, patchHelper *patch.Helper) (*latitude.Server, error) {
+func (r *LatitudeMachineReconciler) reconcileServer(ctx context.Context, machineScope *scope.MachineScope, patchHelper *patch.Helper) (*latitude.Server, error) {
 	log := crlog.FromContext(ctx)
+	latitudeMachine := machineScope.LatitudeMachine
 
 	// metrics for reconcile server
 	start := time.Now()
@@ -216,14 +236,15 @@ func (r *LatitudeMachineReconciler) reconcileServer(ctx context.Context, latitud
 		}
 	}
 
-	userData, err := r.getBootstrapUserData(ctx, latitudeMachine)
+	// Get bootstrap data using the new scope method
+	userData, err := machineScope.GetBootstrapData(ctx)
 	if err != nil {
-		return nil, err
-	}
-	if userData == "" {
-		// not ready -> caller requeue
-		log.Info("Bootstrap user data not ready yet")
-		return nil, nil
+		if errors.Is(err, scope.ErrBootstrapDataNotReady) {
+			// Not an error, just not ready yet
+			log.Info("Bootstrap user data not ready yet")
+			return nil, nil
+		}
+		return nil, fmt.Errorf("failed to get bootstrap data: %w", err)
 	}
 
 	encoded := base64.StdEncoding.EncodeToString([]byte(userData))

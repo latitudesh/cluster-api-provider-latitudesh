@@ -20,9 +20,6 @@ type LatitudeMachineSpec struct {
 
 	// SSHKeys is a list of SSH key IDs to be installed on the server
 	SSHKeys []string `json:"sshKeys,omitempty"`
-
-	// UserData is cloud-init user data to be applied to the server
-	UserData string `json:"userData,omitempty"`
 }
 
 type LatitudeMachineStatus struct {
