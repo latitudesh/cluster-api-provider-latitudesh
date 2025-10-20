@@ -179,6 +179,16 @@ func (r *LatitudeMachineReconciler) reconcileDelete(ctx context.Context, latitud
 		r.recorder.Eventf(latitudeMachine, corev1.EventTypeNormal, "SuccessfulDelete", "Deleted server %s", latitudeMachine.Status.ServerID)
 	}
 
+	if latitudeMachine.Status.UserDataID != "" {
+		err := r.LatitudeClient.DeleteUserData(ctx, latitudeMachine.Status.UserDataID)
+		if err != nil {
+			log.Error(err, "failed to delete user data", "userDataID", latitudeMachine.Status.UserDataID)
+			r.recorder.Eventf(latitudeMachine, corev1.EventTypeWarning, "FailedDeleteUserData", "Failed to delete user data %s: %v", latitudeMachine.Status.UserDataID, err)
+		} else {
+			r.recorder.Eventf(latitudeMachine, corev1.EventTypeNormal, "SuccessfulDeleteUserData", "Deleted user data %s", latitudeMachine.Status.UserDataID)
+		}
+	}
+
 	// Remove finalizer
 	controllerutil.RemoveFinalizer(latitudeMachine, LatitudeFinalizerName)
 	log.Info("Successfully deleted LatitudeMachine")
@@ -234,6 +244,9 @@ func (r *LatitudeMachineReconciler) reconcileServer(ctx context.Context, latitud
 	if err != nil {
 		return nil, fmt.Errorf("create user-data: %w", err)
 	}
+
+	// Store user data ID in status
+	latitudeMachine.Status.UserDataID = udID
 
 	// Create new server
 	spec := latitude.ServerSpec{

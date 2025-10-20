@@ -26,6 +26,9 @@ spec:
     - jsonPath: .status.serverID
       name: ServerID
       type: string
+    - jsonPath: .status.userDataID
+      name: UserDataID
+      type: string
     name: v1beta1
     schema:
       openAPIV3Schema:
@@ -170,6 +173,9 @@ spec:
                 type: boolean
               serverID:
                 description: ServerID is the Latitude.sh server ID
+                type: string
+              userDataID:
+                description: UserDataID is the Latitude.sh user data ID
                 type: string
             type: object
         type: object
