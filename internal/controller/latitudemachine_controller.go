@@ -236,17 +236,30 @@ func (r *LatitudeMachineReconciler) reconcileServer(ctx context.Context, latitud
 		return nil, nil
 	}
 
-	encoded := base64.StdEncoding.EncodeToString([]byte(userData))
-	udID, err := r.LatitudeClient.CreateUserData(ctx, latitude.CreateUserDataRequest{
-		Name:    fmt.Sprintf("%s-%s", latitudeMachine.Name, latitudeMachine.UID),
-		Content: encoded,
-	})
-	if err != nil {
-		return nil, fmt.Errorf("create user-data: %w", err)
-	}
+	var udID string
+	if latitudeMachine.Status.UserDataID != "" {
+		udID = latitudeMachine.Status.UserDataID
+		log.Info("Reusing existing user data", "userDataID", udID)
+	} else {
+		// Create new user data
+		encoded := base64.StdEncoding.EncodeToString([]byte(userData))
+		udID, err = r.LatitudeClient.CreateUserData(ctx, latitude.CreateUserDataRequest{
+			Name:    fmt.Sprintf("%s-%s", latitudeMachine.Name, latitudeMachine.UID),
+			Content: encoded,
+		})
+		if err != nil {
+			return nil, fmt.Errorf("create user-data: %w", err)
+		}
 
-	// Store user data ID in status
-	latitudeMachine.Status.UserDataID = udID
+		// Store user data ID in status
+		latitudeMachine.Status.UserDataID = udID
+		log.Info("Created new user data", "userDataID", udID)
+
+		// Persist the UserDataID immediately so we don't recreate it on retry
+		if err := patchHelper.Patch(ctx, latitudeMachine, patch.WithStatusObservedGeneration{}); err != nil {
+			log.Error(err, "failed to persist status after CreateUserData")
+		}
+	}
 
 	// Create new server
 	spec := latitude.ServerSpec{
