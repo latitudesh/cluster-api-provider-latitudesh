@@ -314,7 +314,7 @@ func (r *LatitudeMachineReconciler) getProjectID(ctx context.Context, latitudeMa
 	if err != nil {
 		return ""
 	}
-	if cluster.Spec.ProjectRef != nil {
+	if cluster != nil && cluster.Spec.ProjectRef != nil {
 		return cluster.Spec.ProjectRef.ProjectID
 	}
 	return ""
@@ -336,6 +336,10 @@ func (r *LatitudeMachineReconciler) getSite(ctx context.Context, latitudeMachine
 
 	cluster, err := r.getLatitudeCluster(ctx, latitudeMachine)
 	if err != nil {
+		return ""
+	}
+
+	if cluster == nil {
 		return ""
 	}
 
