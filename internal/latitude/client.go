@@ -82,7 +82,7 @@ func (c *Client) CreateUserData(ctx context.Context, req CreateUserDataRequest) 
 }
 
 func (c *Client) DeleteUserData(ctx context.Context, userDataID string) error {
-	_, err := c.sdk.UserData.Delete(ctx, userDataID, nil)
+	_, err := c.sdk.UserData.Delete(ctx, userDataID)
 	if err != nil {
 		return fmt.Errorf("failed to delete user data: %w", err)
 	}
