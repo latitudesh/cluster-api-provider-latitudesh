@@ -115,6 +115,15 @@ func (r *LatitudeMachineReconciler) reconcileNormal(ctx context.Context, latitud
 	server, err := r.reconcileServer(ctx, latitudeMachine, patchHelper)
 	if err != nil {
 		log.Error(err, "failed to reconcile server")
+
+		if isPermanentError(err) {
+			log.Info("Permanent error detected, marking as failed", "error", err)
+			r.setCondition(latitudeMachine, infrav1.InstanceReadyCondition, metav1.ConditionFalse, infrav1.InstanceProvisionFailedReason, err.Error())
+			r.recorder.Eventf(latitudeMachine, corev1.EventTypeWarning, "ProvisioningFailed", "Failed to create server (permanent error): %v", err)
+			// Don't return error to avoid automatic requeue
+			// Requeue after a longer interval to allow manual intervention
+			return ctrl.Result{RequeueAfter: 5 * time.Minute}, nil
+		}
 		r.setCondition(latitudeMachine, infrav1.InstanceReadyCondition, metav1.ConditionFalse, infrav1.InstanceProvisionFailedReason, err.Error())
 		r.recorder.Eventf(latitudeMachine, corev1.EventTypeWarning, "FailedCreate", "Failed to create server: %v", err)
 		return ctrl.Result{}, err
@@ -431,4 +440,27 @@ func (r *LatitudeMachineReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		For(&infrav1.LatitudeMachine{}).
 		WithOptions(controller.Options{MaxConcurrentReconciles: 1}).
 		Complete(r)
+}
+
+// isPermanentError checks if an error is a permanent failure that shouldn't be retried frequently
+func isPermanentError(err error) bool {
+	if err == nil {
+		return false
+	}
+
+	errStr := err.Error()
+
+	// List of permanent error codes
+	permanentErrors := []string{
+		"SERVERS_OUT_OF_STOCK",
+		"No stock availability",
+	}
+
+	for _, permErr := range permanentErrors {
+		if strings.Contains(errStr, permErr) {
+			return true
+		}
+	}
+
+	return false
 }
