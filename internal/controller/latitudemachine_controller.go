@@ -106,6 +106,12 @@ func (r *LatitudeMachineReconciler) reconcileNormal(ctx context.Context, latitud
 		return ctrl.Result{}, nil
 	}
 
+	// If already failed permanently, don't retry
+	if latitudeMachine.Status.FailureReason != nil {
+		log.Info("Machine has permanent failure, not retrying")
+		return ctrl.Result{}, nil
+	}
+
 	// Get owner machine
 	ownerMachine, err := capiutil.GetOwnerMachine(ctx, r.Client, latitudeMachine.ObjectMeta)
 	if err != nil {
@@ -141,6 +147,7 @@ func (r *LatitudeMachineReconciler) reconcileNormal(ctx context.Context, latitud
 
 		if isPermanentError(err) {
 			log.Info("Permanent error detected, marking as failed", "error", err)
+			r.setMachineFailed(latitudeMachine, err.Error())
 			r.setCondition(latitudeMachine, infrav1.InstanceReadyCondition, metav1.ConditionFalse, infrav1.InstanceProvisionFailedReason, err.Error())
 			r.recorder.Eventf(latitudeMachine, corev1.EventTypeWarning, "ProvisioningFailed", "Failed to create server (permanent error): %v", err)
 			// Don't return error to avoid automatic requeue
@@ -461,6 +468,18 @@ func (r *LatitudeMachineReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		For(&infrav1.LatitudeMachine{}).
 		WithOptions(controller.Options{MaxConcurrentReconciles: 1}).
 		Complete(r)
+}
+
+// setMachineFailed sets the machine as permanently failed
+func (r *LatitudeMachineReconciler) setMachineFailed(latitudeMachine *infrav1.LatitudeMachine, message string) {
+	latitudeMachine.Status.Ready = false
+	latitudeMachine.Status.FailureReason = stringPtr("CreateError")
+	latitudeMachine.Status.FailureMessage = stringPtr(message)
+}
+
+// stringPtr returns a pointer to the string value passed in
+func stringPtr(s string) *string {
+	return &s
 }
 
 // isPermanentError checks if an error is a permanent failure that shouldn't be retried frequently
