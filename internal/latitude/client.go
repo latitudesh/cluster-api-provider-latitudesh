@@ -81,6 +81,15 @@ func (c *Client) CreateUserData(ctx context.Context, req CreateUserDataRequest) 
 	return "", nil
 }
 
+func (c *Client) DeleteUserData(ctx context.Context, userDataID string) error {
+	_, err := c.sdk.UserData.Delete(ctx, userDataID)
+	if err != nil {
+		return fmt.Errorf("failed to delete user data: %w", err)
+	}
+
+	return nil
+}
+
 func (c *Client) CreateServer(ctx context.Context, spec ServerSpec) (*Server, error) {
 	// Validate server spec
 	if err := c.validateServerSpec(spec); err != nil {

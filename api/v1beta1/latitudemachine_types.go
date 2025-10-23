@@ -35,6 +35,10 @@ type LatitudeMachineStatus struct {
 	// +optional
 	ServerID string `json:"serverID,omitempty"`
 
+	// UserDataID is the Latitude.sh user data ID
+	// +optional
+	UserDataID string `json:"userDataID,omitempty"`
+
 	// Addresses contains the addresses associated with the machine
 	// +optional
 	Addresses []clusterv1.MachineAddress `json:"addresses,omitempty"`
@@ -50,6 +54,7 @@ type LatitudeMachineStatus struct {
 // +kubebuilder:printcolumn:name="Ready",type=string,JSONPath=".status.ready"
 // +kubebuilder:printcolumn:name="ProviderID",type=string,JSONPath=".status.providerID"
 // +kubebuilder:printcolumn:name="ServerID",type=string,JSONPath=".status.serverID"
+// +kubebuilder:printcolumn:name="UserDataID",type=string,JSONPath=".status.userDataID"
 type LatitudeMachine struct {
 	metav1.TypeMeta   `json:",inline"`
 	metav1.ObjectMeta `json:"metadata,omitempty"`

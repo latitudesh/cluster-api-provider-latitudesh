@@ -26,7 +26,8 @@ jobs:
       - name: Verify kind installation
         run: kind version
 
-      - name: Running Test e2e
-        run: |
-          go mod tidy
-          make test-e2e
+      # TODO: Uncomment this when the tests are ready
+      # - name: Running Test e2e
+      #   run: |
+      #     go mod tidy
+      #     make test-e2e

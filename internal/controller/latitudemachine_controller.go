@@ -138,6 +138,15 @@ func (r *LatitudeMachineReconciler) reconcileNormal(ctx context.Context, latitud
 	server, err := r.reconcileServer(ctx, machineScope, patchHelper)
 	if err != nil {
 		log.Error(err, "failed to reconcile server")
+
+		if isPermanentError(err) {
+			log.Info("Permanent error detected, marking as failed", "error", err)
+			r.setCondition(latitudeMachine, infrav1.InstanceReadyCondition, metav1.ConditionFalse, infrav1.InstanceProvisionFailedReason, err.Error())
+			r.recorder.Eventf(latitudeMachine, corev1.EventTypeWarning, "ProvisioningFailed", "Failed to create server (permanent error): %v", err)
+			// Don't return error to avoid automatic requeue
+			// Requeue after a longer interval to allow manual intervention
+			return ctrl.Result{RequeueAfter: 5 * time.Minute}, nil
+		}
 		r.setCondition(latitudeMachine, infrav1.InstanceReadyCondition, metav1.ConditionFalse, infrav1.InstanceProvisionFailedReason, err.Error())
 		r.recorder.Eventf(latitudeMachine, corev1.EventTypeWarning, "FailedCreate", "Failed to create server: %v", err)
 		return ctrl.Result{}, err
@@ -198,6 +207,16 @@ func (r *LatitudeMachineReconciler) reconcileDelete(ctx context.Context, latitud
 		r.recorder.Eventf(latitudeMachine, corev1.EventTypeNormal, "SuccessfulDelete", "Deleted server %s", latitudeMachine.Status.ServerID)
 	}
 
+	if latitudeMachine.Status.UserDataID != "" {
+		err := r.LatitudeClient.DeleteUserData(ctx, latitudeMachine.Status.UserDataID)
+		if err != nil {
+			log.Error(err, "failed to delete user data", "userDataID", latitudeMachine.Status.UserDataID)
+			r.recorder.Eventf(latitudeMachine, corev1.EventTypeWarning, "FailedDeleteUserData", "Failed to delete user data %s: %v", latitudeMachine.Status.UserDataID, err)
+		} else {
+			r.recorder.Eventf(latitudeMachine, corev1.EventTypeNormal, "SuccessfulDeleteUserData", "Deleted user data %s", latitudeMachine.Status.UserDataID)
+		}
+	}
+
 	// Remove finalizer
 	controllerutil.RemoveFinalizer(latitudeMachine, LatitudeFinalizerName)
 	log.Info("Successfully deleted LatitudeMachine")
@@ -247,13 +266,29 @@ func (r *LatitudeMachineReconciler) reconcileServer(ctx context.Context, machine
 		return nil, fmt.Errorf("failed to get bootstrap data: %w", err)
 	}
 
-	encoded := base64.StdEncoding.EncodeToString([]byte(userData))
-	udID, err := r.LatitudeClient.CreateUserData(ctx, latitude.CreateUserDataRequest{
-		Name:    fmt.Sprintf("%s-%s", latitudeMachine.Name, latitudeMachine.UID),
-		Content: encoded,
-	})
-	if err != nil {
-		return nil, fmt.Errorf("create user-data: %w", err)
+	var udID string
+	if latitudeMachine.Status.UserDataID != "" {
+		udID = latitudeMachine.Status.UserDataID
+		log.Info("Reusing existing user data", "userDataID", udID)
+	} else {
+		// Create new user data
+		encoded := base64.StdEncoding.EncodeToString([]byte(userData))
+		udID, err = r.LatitudeClient.CreateUserData(ctx, latitude.CreateUserDataRequest{
+			Name:    fmt.Sprintf("%s-%s", latitudeMachine.Name, latitudeMachine.UID),
+			Content: encoded,
+		})
+		if err != nil {
+			return nil, fmt.Errorf("create user-data: %w", err)
+		}
+
+		// Store user data ID in status
+		latitudeMachine.Status.UserDataID = udID
+		log.Info("Created new user data", "userDataID", udID)
+
+		// Persist the UserDataID immediately so we don't recreate it on retry
+		if err := patchHelper.Patch(ctx, latitudeMachine, patch.WithStatusObservedGeneration{}); err != nil {
+			log.Error(err, "failed to persist status after CreateUserData")
+		}
 	}
 
 	// Create new server
@@ -309,7 +344,7 @@ func (r *LatitudeMachineReconciler) getProjectID(ctx context.Context, latitudeMa
 	if err != nil {
 		return ""
 	}
-	if cluster.Spec.ProjectRef != nil {
+	if cluster != nil && cluster.Spec.ProjectRef != nil {
 		return cluster.Spec.ProjectRef.ProjectID
 	}
 	return ""
@@ -331,6 +366,10 @@ func (r *LatitudeMachineReconciler) getSite(ctx context.Context, latitudeMachine
 
 	cluster, err := r.getLatitudeCluster(ctx, latitudeMachine)
 	if err != nil {
+		return ""
+	}
+
+	if cluster == nil {
 		return ""
 	}
 
@@ -422,4 +461,27 @@ func (r *LatitudeMachineReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		For(&infrav1.LatitudeMachine{}).
 		WithOptions(controller.Options{MaxConcurrentReconciles: 1}).
 		Complete(r)
+}
+
+// isPermanentError checks if an error is a permanent failure that shouldn't be retried frequently
+func isPermanentError(err error) bool {
+	if err == nil {
+		return false
+	}
+
+	errStr := err.Error()
+
+	// List of permanent error codes
+	permanentErrors := []string{
+		"SERVERS_OUT_OF_STOCK",
+		"No stock availability",
+	}
+
+	for _, permErr := range permanentErrors {
+		if strings.Contains(errStr, permErr) {
+			return true
+		}
+	}
+
+	return false
 }
