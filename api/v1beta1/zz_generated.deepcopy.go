@@ -236,6 +236,16 @@ func (in *LatitudeMachineStatus) DeepCopyInto(out *LatitudeMachineStatus) {
 		*out = make([]apiv1beta1.MachineAddress, len(*in))
 		copy(*out, *in)
 	}
+	if in.FailureReason != nil {
+		in, out := &in.FailureReason, &out.FailureReason
+		*out = new(string)
+		**out = **in
+	}
+	if in.FailureMessage != nil {
+		in, out := &in.FailureMessage, &out.FailureMessage
+		*out = new(string)
+		**out = **in
+	}
 	if in.Conditions != nil {
 		in, out := &in.Conditions, &out.Conditions
 		*out = make([]v1.Condition, len(*in))

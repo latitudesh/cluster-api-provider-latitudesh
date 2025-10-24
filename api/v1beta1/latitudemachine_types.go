@@ -43,6 +43,18 @@ type LatitudeMachineStatus struct {
 	// +optional
 	Addresses []clusterv1.MachineAddress `json:"addresses,omitempty"`
 
+	// FailureReason will be set in the event that there is a terminal problem
+	// reconciling the Machine and will contain a succinct value suitable
+	// for machine interpretation.
+	// +optional
+	FailureReason *string `json:"failureReason,omitempty"`
+
+	// FailureMessage will be set in the event that there is a terminal problem
+	// reconciling the Machine and will contain a more verbose string suitable
+	// for logging, and generally appropriate for display to the user.
+	// +optional
+	FailureMessage *string `json:"failureMessage,omitempty"`
+
 	// Conditions defines current service state of the LatitudeMachine
 	// +optional
 	Conditions []metav1.Condition `json:"conditions,omitempty"`

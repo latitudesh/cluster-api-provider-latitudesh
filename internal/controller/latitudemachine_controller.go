@@ -106,6 +106,12 @@ func (r *LatitudeMachineReconciler) reconcileNormal(ctx context.Context, latitud
 		return ctrl.Result{}, nil
 	}
 
+	// If already failed permanently, don't retry
+	if latitudeMachine.Status.FailureReason != nil {
+		log.Info("Machine has permanent failure, not retrying")
+		return ctrl.Result{}, nil
+	}
+
 	// Get owner machine
 	ownerMachine, err := capiutil.GetOwnerMachine(ctx, r.Client, latitudeMachine.ObjectMeta)
 	if err != nil {
@@ -127,6 +133,26 @@ func (r *LatitudeMachineReconciler) reconcileNormal(ctx context.Context, latitud
 		return ctrl.Result{}, fmt.Errorf("failed to create machine scope: %w", err)
 	}
 
+	// Check if this is a worker node and if control plane has failed
+	isControlPlane := false
+	if ownerMachine.Labels != nil {
+		_, isControlPlane = ownerMachine.Labels["cluster.x-k8s.io/control-plane"]
+	}
+
+	if !isControlPlane {
+		// Check if control plane has failed
+		controlPlaneFailed, err := r.checkControlPlaneFailed(ctx, latitudeMachine)
+		if err != nil {
+			log.Error(err, "failed to check control plane status")
+		} else if controlPlaneFailed {
+			log.Info("Control plane has failed, marking worker as failed too")
+			r.setMachineFailed(latitudeMachine, "Control plane provisioning failed, cannot provision worker nodes")
+			r.setCondition(latitudeMachine, infrav1.InstanceReadyCondition, metav1.ConditionFalse, infrav1.InstanceProvisionFailedReason, "Control plane failed")
+			r.recorder.Eventf(latitudeMachine, corev1.EventTypeWarning, "ControlPlaneFailed", "Cannot provision worker: control plane has failed")
+			return ctrl.Result{}, nil
+		}
+	}
+
 	// Check if we have required fields
 	if err := r.validateMachineSpec(ctx, latitudeMachine); err != nil {
 		log.Info("Invalid machine spec", "error", err)
@@ -141,6 +167,7 @@ func (r *LatitudeMachineReconciler) reconcileNormal(ctx context.Context, latitud
 
 		if isPermanentError(err) {
 			log.Info("Permanent error detected, marking as failed", "error", err)
+			r.setMachineFailed(latitudeMachine, err.Error())
 			r.setCondition(latitudeMachine, infrav1.InstanceReadyCondition, metav1.ConditionFalse, infrav1.InstanceProvisionFailedReason, err.Error())
 			r.recorder.Eventf(latitudeMachine, corev1.EventTypeWarning, "ProvisioningFailed", "Failed to create server (permanent error): %v", err)
 			// Don't return error to avoid automatic requeue
@@ -339,6 +366,45 @@ func (r *LatitudeMachineReconciler) validateMachineSpec(ctx context.Context, lat
 	return nil
 }
 
+// checkControlPlaneFailed checks if any control plane machine has failed
+func (r *LatitudeMachineReconciler) checkControlPlaneFailed(ctx context.Context, latitudeMachine *infrav1.LatitudeMachine) (bool, error) {
+	log := crlog.FromContext(ctx)
+
+	// Get the cluster
+	cluster, err := r.getLatitudeCluster(ctx, latitudeMachine)
+	if err != nil || cluster == nil {
+		return false, err
+	}
+
+	// List all LatitudeMachines in the same namespace
+	machineList := &infrav1.LatitudeMachineList{}
+	if err := r.Client.List(ctx, machineList, client.InNamespace(latitudeMachine.Namespace)); err != nil {
+		return false, fmt.Errorf("failed to list LatitudeMachines: %w", err)
+	}
+
+	// Check each machine to see if it's a control plane machine that failed
+	for _, machine := range machineList.Items {
+		// Get the owner Machine to check if it's control plane
+		ownerMachine, err := capiutil.GetOwnerMachine(ctx, r.Client, machine.ObjectMeta)
+		if err != nil || ownerMachine == nil {
+			continue
+		}
+
+		// Check if this is a control plane machine
+		if ownerMachine.Labels != nil {
+			if _, isControlPlane := ownerMachine.Labels["cluster.x-k8s.io/control-plane"]; isControlPlane {
+				// Check if it has a permanent failure
+				if machine.Status.FailureReason != nil {
+					log.Info("Control plane machine has failed", "machine", machine.Name)
+					return true, nil
+				}
+			}
+		}
+	}
+
+	return false, nil
+}
+
 func (r *LatitudeMachineReconciler) getProjectID(ctx context.Context, latitudeMachine *infrav1.LatitudeMachine) string {
 	cluster, err := r.getLatitudeCluster(ctx, latitudeMachine)
 	if err != nil {
@@ -461,6 +527,18 @@ func (r *LatitudeMachineReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		For(&infrav1.LatitudeMachine{}).
 		WithOptions(controller.Options{MaxConcurrentReconciles: 1}).
 		Complete(r)
+}
+
+// setMachineFailed sets the machine as permanently failed
+func (r *LatitudeMachineReconciler) setMachineFailed(latitudeMachine *infrav1.LatitudeMachine, message string) {
+	latitudeMachine.Status.Ready = false
+	latitudeMachine.Status.FailureReason = stringPtr("CreateError")
+	latitudeMachine.Status.FailureMessage = stringPtr(message)
+}
+
+// stringPtr returns a pointer to the string value passed in
+func stringPtr(s string) *string {
+	return &s
 }
 
 // isPermanentError checks if an error is a permanent failure that shouldn't be retried frequently
