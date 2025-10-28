@@ -161,6 +161,18 @@ spec:
                   - type
                   type: object
                 type: array
+              failureMessage:
+                description: |-
+                  FailureMessage will be set in the event that there is a terminal problem
+                  reconciling the Machine and will contain a more verbose string suitable
+                  for logging, and generally appropriate for display to the user.
+                type: string
+              failureReason:
+                description: |-
+                  FailureReason will be set in the event that there is a terminal problem
+                  reconciling the Machine and will contain a succinct value suitable
+                  for machine interpretation.
+                type: string
               providerID:
                 description: ProviderID is the provider ID of the server
                 type: string
