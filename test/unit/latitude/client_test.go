@@ -20,10 +20,10 @@ var _ = Describe("Client", func() {
 		It("should return error when LATITUDE_API_KEY is not set", func() {
 			// Unset the env var if it exists
 			oldKey := os.Getenv("LATITUDE_API_KEY")
-			os.Unsetenv("LATITUDE_API_KEY")
+			_ = os.Unsetenv("LATITUDE_API_KEY")
 			defer func() {
 				if oldKey != "" {
-					os.Setenv("LATITUDE_API_KEY", oldKey)
+					_ = os.Setenv("LATITUDE_API_KEY", oldKey)
 				}
 			}()
 
@@ -33,8 +33,10 @@ var _ = Describe("Client", func() {
 		})
 
 		It("should create client successfully with valid API key", func() {
-			os.Setenv("LATITUDE_API_KEY", "test-key")
-			defer os.Unsetenv("LATITUDE_API_KEY")
+			_ = os.Setenv("LATITUDE_API_KEY", "test-key")
+			defer func() {
+				_ = os.Unsetenv("LATITUDE_API_KEY")
+			}()
 
 			client, err := latitude.NewClient()
 			Expect(err).NotTo(HaveOccurred())

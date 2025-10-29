@@ -84,7 +84,7 @@ func (r *LatitudeMachineReconciler) Reconcile(ctx context.Context, req ctrl.Requ
 	}
 
 	// Handle deleted machines
-	if !latitudeMachine.ObjectMeta.DeletionTimestamp.IsZero() {
+	if !latitudeMachine.DeletionTimestamp.IsZero() {
 		return r.reconcileDelete(ctx, latitudeMachine)
 	}
 
@@ -219,6 +219,7 @@ func (r *LatitudeMachineReconciler) reconcileNormal(ctx context.Context, latitud
 	return ctrl.Result{}, nil
 }
 
+//nolint:unparam // error may be used in future
 func (r *LatitudeMachineReconciler) reconcileDelete(ctx context.Context, latitudeMachine *infrav1.LatitudeMachine) (ctrl.Result, error) {
 	log := crlog.FromContext(ctx)
 
@@ -345,23 +346,23 @@ func (r *LatitudeMachineReconciler) reconcileServer(ctx context.Context, machine
 }
 
 func (r *LatitudeMachineReconciler) validateMachineSpec(ctx context.Context, latitudeMachine *infrav1.LatitudeMachine) error {
-	var errors []string
+	var errMsgs []string
 
 	if latitudeMachine.Spec.OperatingSystem == "" {
-		errors = append(errors, "operatingSystem is required")
+		errMsgs = append(errMsgs, "operatingSystem is required")
 	}
 	if latitudeMachine.Spec.Plan == "" {
-		errors = append(errors, "plan is required")
+		errMsgs = append(errMsgs, "plan is required")
 	}
 	if r.getProjectID(ctx, latitudeMachine) == "" {
-		errors = append(errors, "projectID is required")
+		errMsgs = append(errMsgs, "projectID is required")
 	}
 	if r.getSite(ctx, latitudeMachine) == "" {
-		errors = append(errors, "site is required")
+		errMsgs = append(errMsgs, "site is required")
 	}
 
-	if len(errors) > 0 {
-		return fmt.Errorf("validation failed: %s", strings.Join(errors, ", "))
+	if len(errMsgs) > 0 {
+		return fmt.Errorf("validation failed: %s", strings.Join(errMsgs, ", "))
 	}
 	return nil
 }
@@ -378,7 +379,7 @@ func (r *LatitudeMachineReconciler) checkControlPlaneFailed(ctx context.Context,
 
 	// List all LatitudeMachines in the same namespace
 	machineList := &infrav1.LatitudeMachineList{}
-	if err := r.Client.List(ctx, machineList, client.InNamespace(latitudeMachine.Namespace)); err != nil {
+	if err := r.List(ctx, machineList, client.InNamespace(latitudeMachine.Namespace)); err != nil {
 		return false, fmt.Errorf("failed to list LatitudeMachines: %w", err)
 	}
 
@@ -471,7 +472,7 @@ func (r *LatitudeMachineReconciler) getLatitudeCluster(ctx context.Context, lati
 		Namespace: cluster.Namespace,
 		Name:      cluster.Spec.InfrastructureRef.Name,
 	}
-	if err := r.Client.Get(ctx, key, latitudeCluster); err != nil {
+	if err := r.Get(ctx, key, latitudeCluster); err != nil {
 		return nil, fmt.Errorf("get LatitudeCluster: %w", err)
 	}
 
@@ -482,6 +483,7 @@ func (r *LatitudeMachineReconciler) getHostname(latitudeMachine *infrav1.Latitud
 	return fmt.Sprintf("%s-%s", latitudeMachine.Namespace, latitudeMachine.Name)
 }
 
+//nolint:unparam // conditionType may vary in future
 func (r *LatitudeMachineReconciler) setCondition(
 	latitudeMachine *infrav1.LatitudeMachine,
 	conditionType string,

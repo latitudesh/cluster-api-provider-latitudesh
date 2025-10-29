@@ -69,26 +69,26 @@ var _ = Describe("ClusterAPI E2E", Ordered, func() {
 			fmt.Sprintf("NAMESPACE=%s", namespace))
 		output, err := utils.Run(cmd)
 		Expect(err).NotTo(HaveOccurred(), "Failed to deploy the controller-manager")
-		fmt.Fprintf(GinkgoWriter, "Deploy output:\n%s\n", output)
+		_, _ = fmt.Fprintf(GinkgoWriter, "Deploy output:\n%s\n", output)
 
 		By("verifying deployment was created")
 		cmd = exec.Command("kubectl", "get", "deployment", "-n", namespace, "-o", "wide")
 		output, err = utils.Run(cmd)
 		if err != nil {
-			fmt.Fprintf(GinkgoWriter, "Failed to get deployments: %v\n", err)
+			_, _ = fmt.Fprintf(GinkgoWriter, "Failed to get deployments: %v\n", err)
 		} else {
-			fmt.Fprintf(GinkgoWriter, "Deployments:\n%s\n", output)
+			_, _ = fmt.Fprintf(GinkgoWriter, "Deployments:\n%s\n", output)
 		}
 
 		By("checking namespace events")
 		cmd = exec.Command("kubectl", "get", "events", "-n", namespace)
 		output, _ = utils.Run(cmd)
-		fmt.Fprintf(GinkgoWriter, "Events:\n%s\n", output)
+		_, _ = fmt.Fprintf(GinkgoWriter, "Events:\n%s\n", output)
 
 		By("checking replicasets")
 		cmd = exec.Command("kubectl", "get", "rs", "-n", namespace, "-o", "wide")
 		output, _ = utils.Run(cmd)
-		fmt.Fprintf(GinkgoWriter, "ReplicaSets:\n%s\n", output)
+		_, _ = fmt.Fprintf(GinkgoWriter, "ReplicaSets:\n%s\n", output)
 	})
 
 	// After all tests have been executed, clean up by undeploying the controller, uninstalling CRDs,
@@ -289,7 +289,8 @@ var _ = Describe("ClusterAPI E2E", Ordered, func() {
 		AfterEach(func() {
 			// Cleanup
 			By("Deleting the test cluster")
-			cmd := exec.Command("kubectl", "delete", "latitudecluster", clusterName, "-n", clusterNamespace, "--ignore-not-found")
+			cmd := exec.Command("kubectl", "delete", "latitudecluster",
+				clusterName, "-n", clusterNamespace, "--ignore-not-found")
 			_, _ = utils.Run(cmd)
 
 			if manifestFile != "" {

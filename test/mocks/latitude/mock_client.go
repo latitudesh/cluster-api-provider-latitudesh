@@ -9,10 +9,11 @@ import (
 
 // MockClient is a mock implementation of the Latitude client for testing
 type MockClient struct {
-	CreateServerFunc        func(ctx context.Context, spec latitude.ServerSpec) (*latitude.Server, error)
-	GetServerFunc           func(ctx context.Context, serverID string) (*latitude.Server, error)
-	DeleteServerFunc        func(ctx context.Context, serverID string) error
-	WaitForServerFunc       func(ctx context.Context, serverID string, targetStatus string, timeout time.Duration) (*latitude.Server, error)
+	CreateServerFunc  func(ctx context.Context, spec latitude.ServerSpec) (*latitude.Server, error)
+	GetServerFunc     func(ctx context.Context, serverID string) (*latitude.Server, error)
+	DeleteServerFunc  func(ctx context.Context, serverID string) error
+	WaitForServerFunc func(ctx context.Context, serverID string, targetStatus string,
+		timeout time.Duration) (*latitude.Server, error)
 	GetAvailablePlansFunc   func(ctx context.Context) ([]string, error)
 	GetAvailableRegionsFunc func(ctx context.Context) ([]string, error)
 	CreateUserDataFunc      func(ctx context.Context, req latitude.CreateUserDataRequest) (string, error)
@@ -50,7 +51,12 @@ func (m *MockClient) DeleteServer(ctx context.Context, serverID string) error {
 	return nil
 }
 
-func (m *MockClient) WaitForServer(ctx context.Context, serverID string, targetStatus string, timeout time.Duration) (*latitude.Server, error) {
+func (m *MockClient) WaitForServer(
+	ctx context.Context,
+	serverID string,
+	targetStatus string,
+	timeout time.Duration,
+) (*latitude.Server, error) {
 	if m.WaitForServerFunc != nil {
 		return m.WaitForServerFunc(ctx, serverID, targetStatus, timeout)
 	}

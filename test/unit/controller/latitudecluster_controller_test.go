@@ -104,7 +104,7 @@ var _ = Describe("LatitudeClusterReconciler", func() {
 
 			// Fetch updated object
 			updated := &infrav1.LatitudeCluster{}
-			err = reconciler.Client.Get(ctx, req.NamespacedName, updated)
+			err = reconciler.Get(ctx, req.NamespacedName, updated)
 			Expect(err).NotTo(HaveOccurred())
 
 			// Verify finalizer was added
@@ -196,7 +196,7 @@ var _ = Describe("LatitudeClusterReconciler", func() {
 
 			// Verify object was fully deleted (not found)
 			updated := &infrav1.LatitudeCluster{}
-			err = reconciler.Client.Get(ctx, req.NamespacedName, updated)
+			err = reconciler.Get(ctx, req.NamespacedName, updated)
 			Expect(err).To(HaveOccurred())
 			Expect(apierrors.IsNotFound(err)).To(BeTrue())
 		})
