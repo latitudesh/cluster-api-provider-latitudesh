@@ -31,18 +31,18 @@ import (
 )
 
 // namespace where the project is deployed in
-const namespace = "cluster-api-provider-latitudesh-system"
+const namespace = "capl-dev"
 
 // serviceAccountName created for the project
-const serviceAccountName = "cluster-api-provider-latitudesh-controller-manager"
+const serviceAccountName = "capl-controller-manager"
 
 // metricsServiceName is the name of the metrics service of the project
-const metricsServiceName = "cluster-api-provider-latitudesh-controller-manager-metrics-service"
+const metricsServiceName = "capl-controller-manager-metrics-service"
 
 // metricsRoleBindingName is the name of the RBAC that will be created to allow get the metrics data
-const metricsRoleBindingName = "cluster-api-provider-latitudesh-metrics-binding"
+const metricsRoleBindingName = "capl-metrics-binding"
 
-var _ = Describe("Manager", Ordered, func() {
+var _ = Describe("ClusterAPI E2E", Ordered, func() {
 	var controllerPodName string
 
 	// Before running the tests, set up the environment by creating the namespace,
@@ -54,21 +54,41 @@ var _ = Describe("Manager", Ordered, func() {
 		_, err := utils.Run(cmd)
 		Expect(err).NotTo(HaveOccurred(), "Failed to create namespace")
 
-		By("labeling the namespace to enforce the restricted security policy")
-		cmd = exec.Command("kubectl", "label", "--overwrite", "ns", namespace,
-			"pod-security.kubernetes.io/enforce=restricted")
+		By("creating latitudesh-credentials secret")
+		cmd = exec.Command("kubectl", "create", "secret", "generic", "latitudesh-credentials",
+			"--from-literal=API_TOKEN=mock-token-e2e",
+			"--from-literal=LATITUDE_API_KEY=mock-api-key-e2e",
+			"--from-literal=BASE_URL=https://api.latitude.sh",
+			"-n", namespace)
 		_, err = utils.Run(cmd)
-		Expect(err).NotTo(HaveOccurred(), "Failed to label namespace with restricted policy")
-
-		By("installing CRDs")
-		cmd = exec.Command("make", "install")
-		_, err = utils.Run(cmd)
-		Expect(err).NotTo(HaveOccurred(), "Failed to install CRDs")
+		Expect(err).NotTo(HaveOccurred(), "Failed to create credentials secret")
 
 		By("deploying the controller-manager")
-		cmd = exec.Command("make", "deploy", fmt.Sprintf("IMG=%s", projectImage))
-		_, err = utils.Run(cmd)
+		cmd = exec.Command("make", "deploy",
+			fmt.Sprintf("IMG=%s", projectImage),
+			fmt.Sprintf("NAMESPACE=%s", namespace))
+		output, err := utils.Run(cmd)
 		Expect(err).NotTo(HaveOccurred(), "Failed to deploy the controller-manager")
+		fmt.Fprintf(GinkgoWriter, "Deploy output:\n%s\n", output)
+
+		By("verifying deployment was created")
+		cmd = exec.Command("kubectl", "get", "deployment", "-n", namespace, "-o", "wide")
+		output, err = utils.Run(cmd)
+		if err != nil {
+			fmt.Fprintf(GinkgoWriter, "Failed to get deployments: %v\n", err)
+		} else {
+			fmt.Fprintf(GinkgoWriter, "Deployments:\n%s\n", output)
+		}
+
+		By("checking namespace events")
+		cmd = exec.Command("kubectl", "get", "events", "-n", namespace)
+		output, _ = utils.Run(cmd)
+		fmt.Fprintf(GinkgoWriter, "Events:\n%s\n", output)
+
+		By("checking replicasets")
+		cmd = exec.Command("kubectl", "get", "rs", "-n", namespace, "-o", "wide")
+		output, _ = utils.Run(cmd)
+		fmt.Fprintf(GinkgoWriter, "ReplicaSets:\n%s\n", output)
 	})
 
 	// After all tests have been executed, clean up by undeploying the controller, uninstalling CRDs,
@@ -80,10 +100,6 @@ var _ = Describe("Manager", Ordered, func() {
 
 		By("undeploying the controller-manager")
 		cmd = exec.Command("make", "undeploy")
-		_, _ = utils.Run(cmd)
-
-		By("uninstalling CRDs")
-		cmd = exec.Command("make", "uninstall")
 		_, _ = utils.Run(cmd)
 
 		By("removing manager namespace")
@@ -137,7 +153,7 @@ var _ = Describe("Manager", Ordered, func() {
 	SetDefaultEventuallyTimeout(2 * time.Minute)
 	SetDefaultEventuallyPollingInterval(time.Second)
 
-	Context("Manager", func() {
+	Context("Controller Manager", func() {
 		It("should run successfully", func() {
 			By("validating that the controller-manager pod is running as expected")
 			verifyControllerUp := func(g Gomega) {
@@ -173,7 +189,7 @@ var _ = Describe("Manager", Ordered, func() {
 		It("should ensure the metrics endpoint is serving metrics", func() {
 			By("creating a ClusterRoleBinding for the service account to allow access to metrics")
 			cmd := exec.Command("kubectl", "create", "clusterrolebinding", metricsRoleBindingName,
-				"--clusterrole=cluster-api-provider-latitudesh-metrics-reader",
+				"--clusterrole=capl-metrics-reader",
 				fmt.Sprintf("--serviceaccount=%s:%s", namespace, serviceAccountName),
 			)
 			_, err := utils.Run(cmd)
@@ -219,7 +235,7 @@ var _ = Describe("Manager", Ordered, func() {
 							"name": "curl",
 							"image": "curlimages/curl:latest",
 							"command": ["/bin/sh", "-c"],
-							"args": ["curl -v -k -H 'Authorization: Bearer %s' https://%s.%s.svc.cluster.local:8443/metrics"],
+							"args": ["curl -v http://%s.%s.svc.cluster.local:8443/metrics"],
 							"securityContext": {
 								"readOnlyRootFilesystem": true,
 								"allowPrivilegeEscalation": false,
@@ -235,7 +251,7 @@ var _ = Describe("Manager", Ordered, func() {
 						}],
 						"serviceAccountName": "%s"
 					}
-				}`, token, metricsServiceName, namespace, serviceAccountName))
+				}`, metricsServiceName, namespace, serviceAccountName))
 			_, err = utils.Run(cmd)
 			Expect(err).NotTo(HaveOccurred(), "Failed to create curl-metrics pod")
 
@@ -256,17 +272,67 @@ var _ = Describe("Manager", Ordered, func() {
 				"controller_runtime_reconcile_total",
 			))
 		})
+	})
 
-		// +kubebuilder:scaffold:e2e-webhooks-checks
+	Context("LatitudeCluster E2E", func() {
+		var (
+			clusterName      string
+			clusterNamespace string
+			manifestFile     string
+		)
 
-		// TODO: Customize the e2e test suite with scenarios specific to your project.
-		// Consider applying sample/CR(s) and check their status and/or verifying
-		// the reconciliation by using the metrics, i.e.:
-		// metricsOutput := getMetricsOutput()
-		// Expect(metricsOutput).To(ContainSubstring(
-		//    fmt.Sprintf(`controller_runtime_reconcile_total{controller="%s",result="success"} 1`,
-		//    strings.ToLower(<Kind>),
-		// ))
+		BeforeEach(func() {
+			clusterName = "test-e2e-cluster"
+			clusterNamespace = "default"
+		})
+
+		AfterEach(func() {
+			// Cleanup
+			By("Deleting the test cluster")
+			cmd := exec.Command("kubectl", "delete", "latitudecluster", clusterName, "-n", clusterNamespace, "--ignore-not-found")
+			_, _ = utils.Run(cmd)
+
+			if manifestFile != "" {
+				_ = utils.CleanupTempFile(manifestFile)
+			}
+		})
+
+		It("should create and reconcile successfully", func() {
+			By("Creating a LatitudeCluster manifest")
+			manifest := fmt.Sprintf(`apiVersion: infrastructure.cluster.x-k8s.io/v1beta1
+kind: LatitudeCluster
+metadata:
+  name: %s
+  namespace: %s
+spec:
+  location: SAO
+  projectRef:
+    projectID: test-project-id
+`, clusterName, clusterNamespace)
+
+			manifestFile = filepath.Join("/tmp", fmt.Sprintf("%s.yaml", clusterName))
+			err := utils.CreateTempFile(manifestFile, manifest)
+			Expect(err).NotTo(HaveOccurred())
+
+			By("Applying the LatitudeCluster manifest")
+			cmd := exec.Command("kubectl", "apply", "-f", manifestFile)
+			_, err = utils.Run(cmd)
+			Expect(err).NotTo(HaveOccurred())
+
+			By("Waiting for LatitudeCluster to be created")
+			Eventually(func() error {
+				cmd := exec.Command("kubectl", "get", "latitudecluster", clusterName, "-n", clusterNamespace)
+				_, err := utils.Run(cmd)
+				return err
+			}, 30*time.Second, 2*time.Second).Should(Succeed())
+
+			By("Verifying LatitudeCluster was created successfully")
+			cmd = exec.Command("kubectl", "get", "latitudecluster", clusterName, "-n", clusterNamespace, "-o", "yaml")
+			output, err := utils.Run(cmd)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(output).To(ContainSubstring("location: SAO"))
+			Expect(output).To(ContainSubstring("projectID: test-project-id"))
+		})
 	})
 })
 

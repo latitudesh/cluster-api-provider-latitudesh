@@ -17,8 +17,7 @@ jobs:
         with:
           go-version-file: go.mod
 
-      # TODO: Uncomment this when the tests are ready
-      # - name: Running Tests
-      #   run: |
-      #     go mod tidy
-      #     make test
+      - name: Running Tests
+        run: |
+          go mod tidy
+          make test

@@ -32,6 +32,20 @@ type Server struct {
 	IPAddress []string
 }
 
+// ClientInterface defines the methods for interacting with Latitude.sh API
+type ClientInterface interface {
+	CreateServer(ctx context.Context, spec ServerSpec) (*Server, error)
+	GetServer(ctx context.Context, serverID string) (*Server, error)
+	DeleteServer(ctx context.Context, serverID string) error
+	WaitForServer(ctx context.Context, serverID string, targetStatus string, timeout time.Duration) (*Server, error)
+	GetAvailablePlans(ctx context.Context) ([]string, error)
+	GetAvailableRegions(ctx context.Context) ([]string, error)
+	CreateUserData(ctx context.Context, req CreateUserDataRequest) (string, error)
+	DeleteUserData(ctx context.Context, userDataID string) error
+}
+
+var _ ClientInterface = (*Client)(nil)
+
 func NewClient() (*Client, error) {
 	apiKey := os.Getenv("LATITUDE_API_KEY")
 	if apiKey == "" {

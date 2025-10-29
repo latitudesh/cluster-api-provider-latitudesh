@@ -39,7 +39,7 @@ spec:
       containers:
         - name: manager
           image: controller:latest        # kustomize will use $IMG
-          imagePullPolicy: IfNotPresent
+          imagePullPolicy: Never
           command: ["/manager"]
           args:
             - --leader-elect

@@ -55,7 +55,11 @@ type LatitudeClusterReconciler struct {
 	client.Client
 	Scheme         *runtime.Scheme
 	recorder       record.EventRecorder
-	LatitudeClient *latitude.Client
+	LatitudeClient latitude.ClientInterface
+}
+
+func (r *LatitudeClusterReconciler) SetRecorder(recorder record.EventRecorder) {
+	r.recorder = recorder
 }
 
 func (r *LatitudeClusterReconciler) Reconcile(ctx context.Context, req ctrl.Request) (_ ctrl.Result, reterr error) {
