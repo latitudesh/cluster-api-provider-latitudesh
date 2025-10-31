@@ -91,7 +91,7 @@ func (m *MachineScope) GetRawBootstrapData(ctx context.Context) ([]byte, error) 
 	}
 
 	secret := &corev1.Secret{}
-	if err := m.Client.Get(ctx, key, secret); err != nil {
+	if err := m.Get(ctx, key, secret); err != nil {
 		if apierrors.IsNotFound(err) {
 			m.Logger.Info("Bootstrap data secret not found yet", "secret", key)
 			return nil, ErrBootstrapDataNotReady

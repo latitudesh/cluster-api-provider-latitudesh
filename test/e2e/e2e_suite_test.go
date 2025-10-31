@@ -64,6 +64,12 @@ var _ = BeforeSuite(func() {
 	err = utils.LoadImageToKindClusterWithName(projectImage)
 	ExpectWithOffset(1, err).NotTo(HaveOccurred(), "Failed to load the manager(Operator) image into Kind")
 
+	// This is needed to install the CRDs for all tests, otherwise the tests will fail.
+	By("installing CRDs for all tests")
+	cmd = exec.Command("make", "install")
+	_, err = utils.Run(cmd)
+	ExpectWithOffset(1, err).NotTo(HaveOccurred(), "Failed to install CRDs")
+
 	// The tests-e2e are intended to run on a temporary cluster that is created and destroyed for testing.
 	// To prevent errors when tests run in environments with CertManager already installed,
 	// we check for its presence before execution.
@@ -86,4 +92,9 @@ var _ = AfterSuite(func() {
 		_, _ = fmt.Fprintf(GinkgoWriter, "Uninstalling CertManager...\n")
 		utils.UninstallCertManager()
 	}
+
+	// Uninstall CRDs after all tests
+	By("uninstalling CRDs after all tests")
+	cmd := exec.Command("make", "uninstall")
+	_, _ = utils.Run(cmd) // Ignore errors on cleanup
 })

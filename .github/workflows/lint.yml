@@ -2,12 +2,14 @@ name: Lint
 
 on:
   push:
+    branches: ['**']
   pull_request:
 
 jobs:
   lint:
     name: Run on Ubuntu
     runs-on: ubuntu-latest
+    timeout-minutes: 5
     steps:
       - name: Clone the code
         uses: actions/checkout@v4

@@ -59,7 +59,20 @@ vet: ## Run go vet against code.
 
 .PHONY: test
 test: manifests generate fmt vet setup-envtest ## Run tests.
-	KUBEBUILDER_ASSETS="$(shell $(ENVTEST) use $(ENVTEST_K8S_VERSION) --bin-dir $(LOCALBIN) -p path)" go test $$(go list ./... | grep -v /e2e) -coverprofile cover.out
+	KUBEBUILDER_ASSETS="$(shell $(ENVTEST) use $(ENVTEST_K8S_VERSION) --bin-dir $(LOCALBIN) -p path)" go test ./test/unit/... -coverprofile cover.out
+
+.PHONY: test-unit
+test-unit: manifests generate fmt vet setup-envtest ## Run unit tests only.
+	KUBEBUILDER_ASSETS="$(shell $(ENVTEST) use $(ENVTEST_K8S_VERSION) --bin-dir $(LOCALBIN) -p path)" go test ./test/unit/... -v -coverprofile cover.out
+
+.PHONY: test-unit-verbose
+test-unit-verbose: manifests generate fmt vet setup-envtest ## Run unit tests with verbose output.
+	KUBEBUILDER_ASSETS="$(shell $(ENVTEST) use $(ENVTEST_K8S_VERSION) --bin-dir $(LOCALBIN) -p path)" go test ./test/unit/... -v -ginkgo.v
+
+.PHONY: test-coverage
+test-coverage: test-unit ## Generate test coverage report.
+	go tool cover -html=cover.out -o coverage.html
+	@echo "Coverage report generated: coverage.html"
 
 # TODO(user): To use a different vendor for e2e tests, modify the setup under 'tests/e2e'.
 # The default setup assumes Kind is pre-installed and builds/loads the Manager Docker image locally.

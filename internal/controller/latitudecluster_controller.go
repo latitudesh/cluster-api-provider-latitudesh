@@ -55,7 +55,11 @@ type LatitudeClusterReconciler struct {
 	client.Client
 	Scheme         *runtime.Scheme
 	recorder       record.EventRecorder
-	LatitudeClient *latitude.Client
+	LatitudeClient latitude.ClientInterface
+}
+
+func (r *LatitudeClusterReconciler) SetRecorder(recorder record.EventRecorder) {
+	r.recorder = recorder
 }
 
 func (r *LatitudeClusterReconciler) Reconcile(ctx context.Context, req ctrl.Request) (_ ctrl.Result, reterr error) {
@@ -102,7 +106,7 @@ func (r *LatitudeClusterReconciler) Reconcile(ctx context.Context, req ctrl.Requ
 	}()
 
 	// Handle deleted clusters
-	if !latitudeCluster.ObjectMeta.DeletionTimestamp.IsZero() {
+	if !latitudeCluster.DeletionTimestamp.IsZero() {
 		return r.reconcileDelete(ctx, latitudeCluster)
 	}
 
@@ -169,6 +173,7 @@ func (r *LatitudeClusterReconciler) reconcileNormal(ctx context.Context, latitud
 	return ctrl.Result{}, nil
 }
 
+//nolint:unparam // error may be used in future
 func (r *LatitudeClusterReconciler) reconcileDelete(ctx context.Context, latitudeCluster *infrav1.LatitudeCluster) (ctrl.Result, error) {
 	log := crlog.FromContext(ctx)
 
@@ -254,6 +259,7 @@ func (r *LatitudeClusterReconciler) cleanupInfrastructure(ctx context.Context, l
 	return nil
 }
 
+//nolint:unparam // conditionType may vary in future
 func (r *LatitudeClusterReconciler) setCondition(latitudeCluster *infrav1.LatitudeCluster, conditionType string, status metav1.ConditionStatus, reason, message string) {
 	condition := metav1.Condition{
 		Type:               conditionType,
