@@ -65,12 +65,22 @@ spec:
                 description: ProviderID is the unique identifier as specified by the
                   cloud provider
                 type: string
-              sshKeys:
-                description: SSHKeys is a list of SSH key IDs to be installed on the
-                  server
-                items:
-                  type: string
-                type: array
+              sshKeySecretRef:
+                description: |-
+                  SSHKeySecretRef references a Kubernetes Secret containing SSH key IDs.
+                  The Secret must contain a key with a comma-separated list of SSH key IDs.
+                  Example: "ssh_abc123,ssh_def456"
+                properties:
+                  name:
+                    description: name is unique within a namespace to reference a
+                      secret resource.
+                    type: string
+                  namespace:
+                    description: namespace defines the space within which the secret
+                      name must be unique.
+                    type: string
+                type: object
+                x-kubernetes-map-type: atomic
             required:
             - operatingSystem
             - plan
