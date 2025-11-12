@@ -53,9 +53,17 @@ Kubernetes Cluster API infrastructure provider for [Latitude.sh](https://www.lat
 For testing/development clusters, manual DNS configuration is required. See [PR #8](https://github.com/latitudesh/cluster-api-provider-latitudesh/pull/8) for detailed testing steps.
 
 ## Quick Start
-- [x] Link to [Contributing guide](CONTRIBUTING.md)
-- [x] Link to Testing (PR #8)
-- [ ] Link to Examples
+
+### Documentation
+
+- [SSH Keys Configuration](docs/ssh-keys-configuration.md) - Configure SSH keys using Kubernetes Secrets and External Secrets
+- [Contributing Guide](CONTRIBUTING.md)
+- [Examples](examples/) - Example cluster manifests
+- Testing (PR #8)
+
+### Configuration
+
+**SSH Keys:** Starting with v0.2.0, SSH keys are configured via Kubernetes Secrets instead of hardcoded in manifests. See [SSH Keys Configuration Guide](docs/ssh-keys-configuration.md) for details.
 
 ## License
 

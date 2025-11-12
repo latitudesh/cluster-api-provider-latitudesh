@@ -46,7 +46,7 @@ type LatitudeMachineReconciler struct {
 	client.Client
 	Scheme         *runtime.Scheme
 	recorder       record.EventRecorder
-	LatitudeClient *latitude.Client
+	LatitudeClient latitude.ClientInterface
 }
 
 func (r *LatitudeMachineReconciler) Reconcile(ctx context.Context, req ctrl.Request) (_ ctrl.Result, reterr error) {
@@ -319,6 +319,12 @@ func (r *LatitudeMachineReconciler) reconcileServer(ctx context.Context, machine
 		}
 	}
 
+	// Get SSH keys from secret
+	sshKeys, err := r.getSSHKeys(ctx, latitudeMachine)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get SSH keys: %w", err)
+	}
+
 	// Create new server
 	spec := latitude.ServerSpec{
 		Project:         r.getProjectID(ctx, latitudeMachine),
@@ -326,7 +332,7 @@ func (r *LatitudeMachineReconciler) reconcileServer(ctx context.Context, machine
 		OperatingSystem: latitudeMachine.Spec.OperatingSystem,
 		Site:            r.getSite(ctx, latitudeMachine),
 		Hostname:        r.getHostname(latitudeMachine),
-		SSHKeys:         latitudeMachine.Spec.SSHKeys,
+		SSHKeys:         sshKeys,
 		UserData:        udID,
 	}
 
@@ -477,6 +483,79 @@ func (r *LatitudeMachineReconciler) getLatitudeCluster(ctx context.Context, lati
 	}
 
 	return latitudeCluster, nil
+}
+
+// getSSHKeys retrieves SSH key IDs from the referenced secret
+func (r *LatitudeMachineReconciler) getSSHKeys(ctx context.Context, latitudeMachine *infrav1.LatitudeMachine) ([]string, error) {
+	log := crlog.FromContext(ctx)
+
+	// If no secret reference is provided, return empty array
+	if latitudeMachine.Spec.SSHKeySecretRef == nil {
+		log.Info("No SSH key secret reference provided, creating server without SSH keys")
+		return []string{}, nil
+	}
+
+	secretRef := latitudeMachine.Spec.SSHKeySecretRef
+
+	// Get the secret
+	secret := &corev1.Secret{}
+	secretKey := client.ObjectKey{
+		Namespace: secretRef.Namespace,
+		Name:      secretRef.Name,
+	}
+
+	// If namespace is not specified in the reference, use the LatitudeMachine's namespace
+	if secretKey.Namespace == "" {
+		secretKey.Namespace = latitudeMachine.Namespace
+	}
+
+	if err := r.Get(ctx, secretKey, secret); err != nil {
+		if apierrors.IsNotFound(err) {
+			return nil, fmt.Errorf("SSH key secret %s/%s not found", secretKey.Namespace, secretKey.Name)
+		}
+		return nil, fmt.Errorf("failed to get SSH key secret: %w", err)
+	}
+
+	// Get the SSH keys from the secret
+	// The secret should contain a key with comma-separated SSH key IDs
+	var sshKeyData []byte
+	var found bool
+
+	// Try to find the data in the secret
+	// First, check if there's a specific key specified in the secret reference
+	// Since corev1.SecretReference doesn't have a Key field, we'll use a default key name
+	// Users can use any key name, we'll look for common ones
+	for _, keyName := range []string{"ssh-key-ids", "sshKeys", "ssh_keys", "keys"} {
+		if data, ok := secret.Data[keyName]; ok {
+			sshKeyData = data
+			found = true
+			log.Info("Found SSH keys in secret", "key", keyName)
+			break
+		}
+	}
+
+	if !found {
+		return nil, fmt.Errorf("SSH key secret %s/%s does not contain any of the expected keys (ssh-key-ids, sshKeys, ssh_keys, keys)", secretKey.Namespace, secretKey.Name)
+	}
+
+	// Parse the comma-separated string
+	sshKeyString := strings.TrimSpace(string(sshKeyData))
+	if sshKeyString == "" {
+		log.Info("SSH key secret is empty, creating server without SSH keys")
+		return []string{}, nil
+	}
+
+	// Split by comma and trim whitespace
+	sshKeys := []string{}
+	for _, key := range strings.Split(sshKeyString, ",") {
+		trimmedKey := strings.TrimSpace(key)
+		if trimmedKey != "" {
+			sshKeys = append(sshKeys, trimmedKey)
+		}
+	}
+
+	log.Info("Retrieved SSH keys from secret", "count", len(sshKeys))
+	return sshKeys, nil
 }
 
 func (r *LatitudeMachineReconciler) getHostname(latitudeMachine *infrav1.LatitudeMachine) string {
