@@ -51,6 +51,7 @@ rules:
 - apiGroups:
   - infrastructure.cluster.x-k8s.io
   resources:
+  - cloudflareloadbalancers
   - latitudeclusters
   - latitudemachines
   verbs:
@@ -64,6 +65,7 @@ rules:
 - apiGroups:
   - infrastructure.cluster.x-k8s.io
   resources:
+  - cloudflareloadbalancers/finalizers
   - latitudeclusters/finalizers
   - latitudemachines/finalizers
   - latitudemachinetemplates/finalizers
@@ -72,6 +74,7 @@ rules:
 - apiGroups:
   - infrastructure.cluster.x-k8s.io
   resources:
+  - cloudflareloadbalancers/status
   - latitudeclusters/status
   - latitudemachines/status
   verbs:

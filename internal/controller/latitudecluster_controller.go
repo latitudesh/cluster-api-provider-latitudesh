@@ -297,6 +297,38 @@ func (r *LatitudeClusterReconciler) setupControlPlaneEndpoint(ctx context.Contex
 		return true, nil
 	}
 
+	// Check if there's a CloudflareLoadBalancer for this cluster
+	cflbList := &infrav1.CloudflareLoadBalancerList{}
+	if err := r.List(ctx, cflbList, client.InNamespace(latitudeCluster.Namespace)); err != nil {
+		log.V(1).Info("Failed to list CloudflareLoadBalancers", "error", err)
+		// Continue with fallback to direct machine IP
+	} else {
+		// Find a CloudflareLoadBalancer that references this cluster
+		for i := range cflbList.Items {
+			cflb := &cflbList.Items[i]
+			if cflb.Spec.ClusterRef.Name == latitudeCluster.Name {
+				if cflb.Status.Ready && cflb.Status.Endpoint != "" {
+					// Use the CloudflareLoadBalancer endpoint
+					port := cflb.Spec.Port
+					if port == 0 {
+						port = 6443
+					}
+					latitudeCluster.Status.ControlPlaneEndpoint.Host = cflb.Status.Endpoint
+					latitudeCluster.Status.ControlPlaneEndpoint.Port = port
+					r.setCondition(latitudeCluster, ControlPlaneEndpointSetReason, metav1.ConditionTrue, "ControlPlaneEndpointSet",
+						fmt.Sprintf("Control plane endpoint set from CloudflareLoadBalancer: %s:%d", cflb.Status.Endpoint, port))
+					log.Info("Control plane endpoint set from CloudflareLoadBalancer",
+						"endpoint", cflb.Status.Endpoint,
+						"port", port)
+					return true, nil
+				}
+				log.V(1).Info("CloudflareLoadBalancer found but not ready yet", "name", cflb.Name)
+				// CloudflareLoadBalancer exists but not ready, wait for it
+				return false, nil
+			}
+		}
+	}
+
 	// List all CAPI Machines that belong to this cluster
 	machineList := &clusterv1.MachineList{}
 	if err := r.List(ctx, machineList,

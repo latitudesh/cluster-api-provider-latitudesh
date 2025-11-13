@@ -1,0 +1,186 @@
+---
+# Secret containing Cloudflare API credentials
+apiVersion: v1
+kind: Secret
+metadata:
+  name: cloudflare-credentials
+  namespace: default
+type: Opaque
+stringData:
+  apiToken: "your-cloudflare-api-token-here"
+---
+# CAPI Cluster
+apiVersion: cluster.x-k8s.io/v1beta1
+kind: Cluster
+metadata:
+  name: my-cluster
+  namespace: default
+spec:
+  clusterNetwork:
+    pods:
+      cidrBlocks:
+        - 10.244.0.0/16
+    services:
+      cidrBlocks:
+        - 10.96.0.0/12
+  infrastructureRef:
+    apiVersion: infrastructure.cluster.x-k8s.io/v1beta1
+    kind: LatitudeCluster
+    name: my-cluster
+  controlPlaneRef:
+    apiVersion: controlplane.cluster.x-k8s.io/v1beta1
+    kind: KubeadmControlPlane
+    name: my-cluster-control-plane
+---
+# LatitudeCluster - Infrastructure definition
+apiVersion: infrastructure.cluster.x-k8s.io/v1beta1
+kind: LatitudeCluster
+metadata:
+  name: my-cluster
+  namespace: default
+spec:
+  location: "AS"  # Singapore
+  projectRef:
+    projectID: "your-latitude-project-id"
+  # controlPlaneEndpoint will be set automatically by CloudflareLoadBalancer
+---
+# CloudflareLoadBalancer - Manages LB and DNS
+apiVersion: infrastructure.cluster.x-k8s.io/v1beta1
+kind: CloudflareLoadBalancer
+metadata:
+  name: my-cluster-lb
+  namespace: default
+spec:
+  # Cloudflare Account ID (for load balancer pools)
+  accountId: "your-cloudflare-account-id"
+
+  # Cloudflare Zone ID where DNS and LB will be created
+  zoneId: "your-cloudflare-zone-id"
+
+  # Hostname for the Kubernetes API (must be in your Cloudflare zone)
+  hostname: "api.my-cluster.example.com"
+
+  # Port for Kubernetes API (default: 6443)
+  port: 6443
+
+  # Reference to Cloudflare credentials
+  credentialsRef:
+    name: cloudflare-credentials
+    # namespace: default  # Optional, defaults to same namespace
+
+  # Reference to the LatitudeCluster
+  clusterRef:
+    name: my-cluster
+    # namespace: default  # Optional, defaults to same namespace
+
+  # Health check configuration (optional)
+  healthCheckPath: "/healthz"
+  healthCheckInterval: 60
+
+  # DNS TTL in seconds (optional, default: 120)
+  ttl: 120
+
+  # Proxied through Cloudflare (default: false for K8s API)
+  # Set to false to allow TLS passthrough
+  proxied: false
+---
+# KubeadmControlPlane - Control plane configuration
+apiVersion: controlplane.cluster.x-k8s.io/v1beta1
+kind: KubeadmControlPlane
+metadata:
+  name: my-cluster-control-plane
+  namespace: default
+spec:
+  replicas: 3  # 3 control plane nodes for HA
+  version: v1.33.0
+  machineTemplate:
+    infrastructureRef:
+      apiVersion: infrastructure.cluster.x-k8s.io/v1beta1
+      kind: LatitudeMachineTemplate
+      name: my-cluster-control-plane
+  kubeadmConfigSpec:
+    initConfiguration:
+      nodeRegistration:
+        kubeletExtraArgs:
+          cloud-provider: external
+    joinConfiguration:
+      nodeRegistration:
+        kubeletExtraArgs:
+          cloud-provider: external
+    clusterConfiguration:
+      apiServer:
+        certSANs:
+          - "api.my-cluster.example.com"  # Add your Cloudflare hostname
+          - "localhost"
+          - "127.0.0.1"
+      controllerManager:
+        extraArgs:
+          cloud-provider: external
+---
+# LatitudeMachineTemplate for control plane
+apiVersion: infrastructure.cluster.x-k8s.io/v1beta1
+kind: LatitudeMachineTemplate
+metadata:
+  name: my-cluster-control-plane
+  namespace: default
+spec:
+  template:
+    spec:
+      plan: "c3.small.x86"  # Latitude.sh server plan
+      operatingSystem: "ubuntu_22_04"
+      # Additional configuration can be added here
+---
+# MachineDeployment for worker nodes (optional)
+apiVersion: cluster.x-k8s.io/v1beta1
+kind: MachineDeployment
+metadata:
+  name: my-cluster-workers
+  namespace: default
+spec:
+  clusterName: my-cluster
+  replicas: 2
+  selector:
+    matchLabels:
+      cluster.x-k8s.io/cluster-name: my-cluster
+  template:
+    metadata:
+      labels:
+        cluster.x-k8s.io/cluster-name: my-cluster
+    spec:
+      clusterName: my-cluster
+      version: v1.33.0
+      bootstrap:
+        configRef:
+          apiVersion: bootstrap.cluster.x-k8s.io/v1beta1
+          kind: KubeadmConfigTemplate
+          name: my-cluster-worker
+      infrastructureRef:
+        apiVersion: infrastructure.cluster.x-k8s.io/v1beta1
+        kind: LatitudeMachineTemplate
+        name: my-cluster-worker
+---
+# LatitudeMachineTemplate for workers
+apiVersion: infrastructure.cluster.x-k8s.io/v1beta1
+kind: LatitudeMachineTemplate
+metadata:
+  name: my-cluster-worker
+  namespace: default
+spec:
+  template:
+    spec:
+      plan: "c3.small.x86"
+      operatingSystem: "ubuntu_22_04"
+---
+# KubeadmConfigTemplate for workers
+apiVersion: bootstrap.cluster.x-k8s.io/v1beta1
+kind: KubeadmConfigTemplate
+metadata:
+  name: my-cluster-worker
+  namespace: default
+spec:
+  template:
+    spec:
+      joinConfiguration:
+        nodeRegistration:
+          kubeletExtraArgs:
+            cloud-provider: external
