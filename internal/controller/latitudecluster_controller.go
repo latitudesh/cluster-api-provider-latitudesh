@@ -175,6 +175,12 @@ func (r *LatitudeClusterReconciler) reconcileNormal(ctx context.Context, latitud
 	// Endpoint discovered successfully
 	log.Info("Control plane endpoint discovered and set")
 
+	// Ensure Cluster's control plane endpoint is also set
+	if err := r.ensureClusterEndpoint(ctx, latitudeCluster, cluster); err != nil {
+		log.Error(err, "failed to ensure cluster control plane endpoint")
+		return ctrl.Result{RequeueAfter: 30 * time.Second}, err
+	}
+
 	r.recorder.Eventf(latitudeCluster, corev1.EventTypeNormal, "SuccessfulInfrastructure", "Cluster infrastructure is ready with endpoint %s:%d",
 		latitudeCluster.Status.ControlPlaneEndpoint.Host,
 		latitudeCluster.Status.ControlPlaneEndpoint.Port)
@@ -432,6 +438,48 @@ func (r *LatitudeClusterReconciler) setupControlPlaneEndpoint(ctx context.Contex
 		"Control plane endpoint set to %s:6443 from machine %s", externalIP, latitudeMachine.Name)
 
 	return true, nil
+}
+
+// ensureClusterEndpoint ensures the parent Cluster resource has the control plane endpoint set
+func (r *LatitudeClusterReconciler) ensureClusterEndpoint(ctx context.Context, latitudeCluster *infrav1.LatitudeCluster, cluster *clusterv1.Cluster) error {
+	log := crlog.FromContext(ctx)
+
+	// Check if LatitudeCluster has a control plane endpoint set
+	if latitudeCluster.Status.ControlPlaneEndpoint.Host == "" {
+		log.V(1).Info("LatitudeCluster has no control plane endpoint set yet")
+		return nil
+	}
+
+	// Check if Cluster already has the endpoint set
+	if cluster.Spec.ControlPlaneEndpoint.Host != "" {
+		log.V(1).Info("Cluster control plane endpoint already set",
+			"host", cluster.Spec.ControlPlaneEndpoint.Host,
+			"port", cluster.Spec.ControlPlaneEndpoint.Port)
+		return nil
+	}
+
+	// Update Cluster's control plane endpoint
+	patchHelper, err := patch.NewHelper(cluster, r.Client)
+	if err != nil {
+		return fmt.Errorf("failed to create patch helper for cluster: %w", err)
+	}
+
+	cluster.Spec.ControlPlaneEndpoint.Host = latitudeCluster.Status.ControlPlaneEndpoint.Host
+	cluster.Spec.ControlPlaneEndpoint.Port = int32(latitudeCluster.Status.ControlPlaneEndpoint.Port)
+
+	if err := patchHelper.Patch(ctx, cluster); err != nil {
+		log.Error(err, "failed to patch cluster control plane endpoint")
+		return fmt.Errorf("failed to patch cluster: %w", err)
+	}
+
+	log.Info("Updated Cluster control plane endpoint",
+		"host", cluster.Spec.ControlPlaneEndpoint.Host,
+		"port", cluster.Spec.ControlPlaneEndpoint.Port)
+
+	r.recorder.Eventf(cluster, corev1.EventTypeNormal, "ControlPlaneEndpointSet",
+		"Control plane endpoint set to %s:%d", cluster.Spec.ControlPlaneEndpoint.Host, cluster.Spec.ControlPlaneEndpoint.Port)
+
+	return nil
 }
 
 // reconcileLoadBalancer provisions and manages the HAProxy load balancer
