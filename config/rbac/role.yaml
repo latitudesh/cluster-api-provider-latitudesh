@@ -54,6 +54,7 @@ rules:
   - cloudflareloadbalancers
   - latitudeclusters
   - latitudemachines
+  - metallbconfigs
   verbs:
   - create
   - delete
@@ -69,6 +70,7 @@ rules:
   - latitudeclusters/finalizers
   - latitudemachines/finalizers
   - latitudemachinetemplates/finalizers
+  - metallbconfigs/finalizers
   verbs:
   - update
 - apiGroups:
@@ -77,6 +79,7 @@ rules:
   - cloudflareloadbalancers/status
   - latitudeclusters/status
   - latitudemachines/status
+  - metallbconfigs/status
   verbs:
   - get
   - patch

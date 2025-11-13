@@ -1,0 +1,186 @@
+---
+# CAPI Cluster
+apiVersion: cluster.x-k8s.io/v1beta1
+kind: Cluster
+metadata:
+  name: my-cluster
+  namespace: default
+spec:
+  clusterNetwork:
+    pods:
+      cidrBlocks:
+        - 10.244.0.0/16
+    services:
+      cidrBlocks:
+        - 10.96.0.0/12
+  infrastructureRef:
+    apiVersion: infrastructure.cluster.x-k8s.io/v1beta1
+    kind: LatitudeCluster
+    name: my-cluster
+  controlPlaneRef:
+    apiVersion: controlplane.cluster.x-k8s.io/v1beta1
+    kind: KubeadmControlPlane
+    name: my-cluster-control-plane
+---
+# LatitudeCluster - Infrastructure definition
+apiVersion: infrastructure.cluster.x-k8s.io/v1beta1
+kind: LatitudeCluster
+metadata:
+  name: my-cluster
+  namespace: default
+spec:
+  location: "AS"  # Singapore
+  projectRef:
+    projectID: "your-latitude-project-id"
+  # controlPlaneEndpoint will be set automatically by MetalLB
+---
+# MetalLBConfig - Configures MetalLB for HA control plane
+apiVersion: infrastructure.cluster.x-k8s.io/v1beta1
+kind: MetalLBConfig
+metadata:
+  name: my-cluster-metallb
+  namespace: default
+spec:
+  # Reference to the LatitudeCluster
+  clusterRef:
+    name: my-cluster
+
+  # IP address pool for MetalLB
+  # These IPs should be available on your network
+  ipAddressPool:
+    name: control-plane-pool
+    addresses:
+      # Option 1: CIDR notation
+      - "192.168.1.240/28"
+      # Option 2: Range notation
+      # - "192.168.1.240-192.168.1.250"
+    autoAssign: true
+    avoidBuggyIPs: false
+
+  # MetalLB version (optional, defaults to v0.14.3)
+  version: "v0.14.3"
+
+  # Control plane endpoint configuration
+  controlPlaneEndpoint:
+    enabled: true
+    port: 6443
+    # Optional: Specify a specific IP from the pool
+    # ipAddress: "192.168.1.240"
+
+  # L2 Advertisement configuration (optional)
+  # If not specified, a default L2Advertisement will be created
+  l2Advertisements:
+    - name: control-plane-l2ad
+      ipAddressPools:
+        - control-plane-pool
+      # Optional: Limit to specific interfaces
+      # interfaces:
+      #   - eth0
+      # Optional: Limit to specific nodes
+      # nodeSelectors:
+      #   - matchLabels:
+      #       node-role.kubernetes.io/control-plane: ""
+---
+# KubeadmControlPlane - Control plane configuration
+apiVersion: controlplane.cluster.x-k8s.io/v1beta1
+kind: KubeadmControlPlane
+metadata:
+  name: my-cluster-control-plane
+  namespace: default
+spec:
+  replicas: 3  # 3 control plane nodes for HA with MetalLB
+  version: v1.33.0
+  machineTemplate:
+    infrastructureRef:
+      apiVersion: infrastructure.cluster.x-k8s.io/v1beta1
+      kind: LatitudeMachineTemplate
+      name: my-cluster-control-plane
+  kubeadmConfigSpec:
+    initConfiguration:
+      nodeRegistration:
+        kubeletExtraArgs:
+          cloud-provider: external
+    joinConfiguration:
+      nodeRegistration:
+        kubeletExtraArgs:
+          cloud-provider: external
+    clusterConfiguration:
+      apiServer:
+        certSANs:
+          # Add the MetalLB LoadBalancer IP here after it's assigned
+          # Or use a wildcard/range
+          - "192.168.1.240"
+          - "192.168.1.241"
+          - "192.168.1.242"
+          - "localhost"
+          - "127.0.0.1"
+      controllerManager:
+        extraArgs:
+          cloud-provider: external
+---
+# LatitudeMachineTemplate for control plane
+apiVersion: infrastructure.cluster.x-k8s.io/v1beta1
+kind: LatitudeMachineTemplate
+metadata:
+  name: my-cluster-control-plane
+  namespace: default
+spec:
+  template:
+    spec:
+      plan: "c3.small.x86"  # Latitude.sh server plan
+      operatingSystem: "ubuntu_22_04"
+---
+# MachineDeployment for worker nodes (optional)
+apiVersion: cluster.x-k8s.io/v1beta1
+kind: MachineDeployment
+metadata:
+  name: my-cluster-workers
+  namespace: default
+spec:
+  clusterName: my-cluster
+  replicas: 2
+  selector:
+    matchLabels:
+      cluster.x-k8s.io/cluster-name: my-cluster
+  template:
+    metadata:
+      labels:
+        cluster.x-k8s.io/cluster-name: my-cluster
+    spec:
+      clusterName: my-cluster
+      version: v1.33.0
+      bootstrap:
+        configRef:
+          apiVersion: bootstrap.cluster.x-k8s.io/v1beta1
+          kind: KubeadmConfigTemplate
+          name: my-cluster-worker
+      infrastructureRef:
+        apiVersion: infrastructure.cluster.x-k8s.io/v1beta1
+        kind: LatitudeMachineTemplate
+        name: my-cluster-worker
+---
+# LatitudeMachineTemplate for workers
+apiVersion: infrastructure.cluster.x-k8s.io/v1beta1
+kind: LatitudeMachineTemplate
+metadata:
+  name: my-cluster-worker
+  namespace: default
+spec:
+  template:
+    spec:
+      plan: "c3.small.x86"
+      operatingSystem: "ubuntu_22_04"
+---
+# KubeadmConfigTemplate for workers
+apiVersion: bootstrap.cluster.x-k8s.io/v1beta1
+kind: KubeadmConfigTemplate
+metadata:
+  name: my-cluster-worker
+  namespace: default
+spec:
+  template:
+    spec:
+      joinConfiguration:
+        nodeRegistration:
+          kubeletExtraArgs:
+            cloud-provider: external
