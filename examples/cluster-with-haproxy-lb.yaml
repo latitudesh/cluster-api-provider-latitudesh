@@ -1,0 +1,132 @@
+apiVersion: cluster.x-k8s.io/v1beta1
+kind: Cluster
+metadata:
+  name: capl-ha-cluster
+  namespace: default
+spec:
+  clusterNetwork:
+    pods:
+      cidrBlocks:
+        - 10.244.0.0/16
+    services:
+      cidrBlocks:
+        - 10.96.0.0/12
+  controlPlaneRef:
+    apiVersion: controlplane.cluster.x-k8s.io/v1beta1
+    kind: KubeadmControlPlane
+    name: capl-ha-cluster-control-plane
+  infrastructureRef:
+    apiVersion: infrastructure.cluster.x-k8s.io/v1beta1
+    kind: LatitudeCluster
+    name: capl-ha-cluster
+---
+apiVersion: infrastructure.cluster.x-k8s.io/v1beta1
+kind: LatitudeCluster
+metadata:
+  name: capl-ha-cluster
+  namespace: default
+spec:
+  location: "ASH"  # Ashburn, Virginia
+  projectRef:
+    projectID: "your-project-id"  # Replace with your Latitude.sh project ID
+  # HAProxy Load Balancer configuration for HA control plane
+  loadBalancer:
+    enabled: true
+    # Optional: specify custom plan (defaults to c2-small-x86)
+    # plan: "c2-small-x86"
+    # Optional: specify custom OS (defaults to ubuntu_24_04_x64_lts)
+    # operatingSystem: "ubuntu_24_04_x64_lts"
+    # Optional: customize API port (defaults to 6443)
+    # port: 6443
+    # Optional: customize stats port (defaults to 9000, set to 0 to disable)
+    # statsPort: 9000
+---
+apiVersion: controlplane.cluster.x-k8s.io/v1beta1
+kind: KubeadmControlPlane
+metadata:
+  name: capl-ha-cluster-control-plane
+  namespace: default
+spec:
+  version: v1.33.0
+  replicas: 3  # HA control plane with 3 replicas
+  machineTemplate:
+    infrastructureRef:
+      apiVersion: infrastructure.cluster.x-k8s.io/v1beta1
+      kind: LatitudeMachineTemplate
+      name: capl-ha-cluster-control-plane
+  kubeadmConfigSpec:
+    initConfiguration:
+      nodeRegistration:
+        kubeletExtraArgs:
+          cloud-provider: external
+    joinConfiguration:
+      nodeRegistration:
+        kubeletExtraArgs:
+          cloud-provider: external
+    clusterConfiguration:
+      apiServer:
+        extraArgs:
+          cloud-provider: external
+      controllerManager:
+        extraArgs:
+          cloud-provider: external
+---
+apiVersion: infrastructure.cluster.x-k8s.io/v1beta1
+kind: LatitudeMachineTemplate
+metadata:
+  name: capl-ha-cluster-control-plane
+  namespace: default
+spec:
+  template:
+    spec:
+      plan: "c3.medium.x86"
+      operatingSystem: "ubuntu_24_04_x64_lts"
+---
+apiVersion: cluster.x-k8s.io/v1beta1
+kind: MachineDeployment
+metadata:
+  name: capl-ha-cluster-workers
+  namespace: default
+spec:
+  clusterName: capl-ha-cluster
+  replicas: 2
+  selector:
+    matchLabels:
+      cluster.x-k8s.io/cluster-name: capl-ha-cluster
+  template:
+    spec:
+      clusterName: capl-ha-cluster
+      version: v1.33.0
+      bootstrap:
+        configRef:
+          apiVersion: bootstrap.cluster.x-k8s.io/v1beta1
+          kind: KubeadmConfigTemplate
+          name: capl-ha-cluster-workers
+      infrastructureRef:
+        apiVersion: infrastructure.cluster.x-k8s.io/v1beta1
+        kind: LatitudeMachineTemplate
+        name: capl-ha-cluster-workers
+---
+apiVersion: infrastructure.cluster.x-k8s.io/v1beta1
+kind: LatitudeMachineTemplate
+metadata:
+  name: capl-ha-cluster-workers
+  namespace: default
+spec:
+  template:
+    spec:
+      plan: "c3.medium.x86"
+      operatingSystem: "ubuntu_24_04_x64_lts"
+---
+apiVersion: bootstrap.cluster.x-k8s.io/v1beta1
+kind: KubeadmConfigTemplate
+metadata:
+  name: capl-ha-cluster-workers
+  namespace: default
+spec:
+  template:
+    spec:
+      joinConfiguration:
+        nodeRegistration:
+          kubeletExtraArgs:
+            cloud-provider: external

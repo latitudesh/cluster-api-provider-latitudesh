@@ -53,6 +53,39 @@ spec:
                     format: int32
                     type: integer
                 type: object
+              loadBalancer:
+                description: LoadBalancer defines the load balancer configuration
+                  for HA control planes
+                properties:
+                  enabled:
+                    description: Enabled indicates whether to provision a HAProxy
+                      load balancer
+                    type: boolean
+                  operatingSystem:
+                    description: |-
+                      OperatingSystem is the OS for the load balancer server
+                      Defaults to "ubuntu_24_04_x64_lts" if not specified
+                    type: string
+                  plan:
+                    description: |-
+                      Plan is the Latitude.sh server plan for the load balancer
+                      Defaults to "c2-small-x86" if not specified
+                    type: string
+                  port:
+                    default: 6443
+                    description: |-
+                      Port is the port where HAProxy will listen for Kubernetes API traffic
+                      Defaults to 6443
+                    format: int32
+                    type: integer
+                  statsPort:
+                    default: 9000
+                    description: |-
+                      StatsPort is the port for HAProxy stats interface
+                      Defaults to 9000. Set to 0 to disable.
+                    format: int32
+                    type: integer
+                type: object
               location:
                 description: Location is the Latitude.sh region/site where resources
                   will be created
@@ -133,6 +166,25 @@ spec:
                   port:
                     format: int32
                     type: integer
+                type: object
+              loadBalancer:
+                description: LoadBalancer contains the status of the load balancer
+                  if enabled
+                properties:
+                  internalIP:
+                    description: InternalIP is the internal IP address of the load
+                      balancer
+                    type: string
+                  publicIP:
+                    description: PublicIP is the public IP address of the load balancer
+                    type: string
+                  ready:
+                    description: Ready indicates whether the load balancer is ready
+                    type: boolean
+                  serverID:
+                    description: ServerID is the Latitude.sh server ID of the load
+                      balancer
+                    type: string
                 type: object
               ready:
                 description: Ready indicates that the cluster infrastructure is ready

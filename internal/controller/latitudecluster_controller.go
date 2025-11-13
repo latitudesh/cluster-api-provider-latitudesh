@@ -13,6 +13,7 @@ import (
 	"k8s.io/client-go/tools/record"
 
 	infrav1 "github.com/latitudesh/cluster-api-provider-latitudesh/api/v1beta1"
+	"github.com/latitudesh/cluster-api-provider-latitudesh/internal/haproxy"
 	"github.com/latitudesh/cluster-api-provider-latitudesh/internal/latitude"
 
 	clusterv1 "sigs.k8s.io/cluster-api/api/v1beta1"
@@ -38,7 +39,8 @@ const (
 	LatitudeClusterFinalizerName = "latitudecluster.infrastructure.cluster.x-k8s.io"
 
 	// Condition types
-	ClusterReadyCondition = "ClusterReady"
+	ClusterReadyCondition      = "ClusterReady"
+	LoadBalancerReadyCondition = "LoadBalancerReady"
 
 	// Condition reasons
 	ClusterProvisionFailedReason       = "ClusterProvisionFailed"
@@ -49,6 +51,15 @@ const (
 	InvalidClusterConfigReason         = "InvalidClusterConfig"
 	ControlPlaneEndpointSetReason      = "ControlPlaneEndpointSet"
 	ControlPlaneEndpointNotReadyReason = "ControlPlaneEndpointNotReady"
+	LoadBalancerProvisioningReason     = "LoadBalancerProvisioning"
+	LoadBalancerProvisionFailedReason  = "LoadBalancerProvisionFailed"
+	LoadBalancerReadyReason            = "LoadBalancerReady"
+
+	// Default values for LoadBalancer
+	DefaultLoadBalancerPlan = "c2-small-x86"
+	DefaultLoadBalancerOS   = "ubuntu_24_04_x64_lts"
+	DefaultAPIPort          = 6443
+	DefaultStatsPort        = 9000
 )
 
 type LatitudeClusterReconciler struct {
@@ -235,13 +246,15 @@ func (r *LatitudeClusterReconciler) reconcileInfrastructure(ctx context.Context,
 		return fmt.Errorf("location %s is not available, available regions: %v", latitudeCluster.Spec.Location, regions)
 	}
 
-	log.Info("Cluster infrastructure setup completed", "location", latitudeCluster.Spec.Location)
+	// Provision load balancer if enabled
+	if latitudeCluster.Spec.LoadBalancer != nil && latitudeCluster.Spec.LoadBalancer.Enabled {
+		if err := r.reconcileLoadBalancer(ctx, latitudeCluster); err != nil {
+			log.Error(err, "failed to reconcile load balancer")
+			return fmt.Errorf("failed to reconcile load balancer: %w", err)
+		}
+	}
 
-	// TODO: Implement additional infrastructure setup if needed:
-	// - Create private networks
-	// - Setup firewalls
-	// - Configure load balancers (if supported)
-	// - Prepare SSH keys
+	log.Info("Cluster infrastructure setup completed", "location", latitudeCluster.Spec.Location)
 
 	return nil
 }
@@ -249,10 +262,27 @@ func (r *LatitudeClusterReconciler) reconcileInfrastructure(ctx context.Context,
 func (r *LatitudeClusterReconciler) cleanupInfrastructure(ctx context.Context, latitudeCluster *infrav1.LatitudeCluster) error {
 	log := crlog.FromContext(ctx)
 
-	// TODO: Implement infrastructure cleanup:
+	// Cleanup load balancer if it exists
+	if latitudeCluster.Status.LoadBalancer != nil && latitudeCluster.Status.LoadBalancer.ServerID != "" {
+		log.Info("Deleting load balancer server", "serverID", latitudeCluster.Status.LoadBalancer.ServerID)
+
+		if err := r.LatitudeClient.DeleteServer(ctx, latitudeCluster.Status.LoadBalancer.ServerID); err != nil {
+			log.Error(err, "failed to delete load balancer server", "serverID", latitudeCluster.Status.LoadBalancer.ServerID)
+			// Don't fail the cleanup if the server is already gone
+			if !strings.Contains(err.Error(), "not found") && !strings.Contains(err.Error(), "404") {
+				return fmt.Errorf("failed to delete load balancer server: %w", err)
+			}
+			log.Info("Load balancer server already deleted or not found")
+		} else {
+			log.Info("Load balancer server deleted successfully")
+			r.recorder.Eventf(latitudeCluster, corev1.EventTypeNormal, "LoadBalancerDeleted",
+				"Load balancer server deleted: %s", latitudeCluster.Status.LoadBalancer.ServerID)
+		}
+	}
+
+	// TODO: Implement additional infrastructure cleanup:
 	// - Remove private networks
 	// - Cleanup firewalls
-	// - Remove load balancers (if created)
 	// - Cleanup SSH keys if created
 
 	log.Info("Cluster infrastructure cleanup completed")
@@ -402,6 +432,167 @@ func (r *LatitudeClusterReconciler) setupControlPlaneEndpoint(ctx context.Contex
 		"Control plane endpoint set to %s:6443 from machine %s", externalIP, latitudeMachine.Name)
 
 	return true, nil
+}
+
+// reconcileLoadBalancer provisions and manages the HAProxy load balancer
+func (r *LatitudeClusterReconciler) reconcileLoadBalancer(ctx context.Context, latitudeCluster *infrav1.LatitudeCluster) error {
+	log := crlog.FromContext(ctx)
+
+	// Initialize status if needed
+	if latitudeCluster.Status.LoadBalancer == nil {
+		latitudeCluster.Status.LoadBalancer = &infrav1.LoadBalancerStatus{}
+	}
+
+	// If load balancer is already provisioned and ready, check if we need to update backends
+	if latitudeCluster.Status.LoadBalancer.ServerID != "" && latitudeCluster.Status.LoadBalancer.Ready {
+		log.V(1).Info("Load balancer already provisioned", "serverID", latitudeCluster.Status.LoadBalancer.ServerID)
+		// TODO: Update backends if control planes changed
+		return nil
+	}
+
+	// If we already have a serverID but it's not ready, check its status
+	if latitudeCluster.Status.LoadBalancer.ServerID != "" {
+		server, err := r.LatitudeClient.GetServer(ctx, latitudeCluster.Status.LoadBalancer.ServerID)
+		if err != nil {
+			log.Error(err, "failed to get load balancer server status")
+			r.setCondition(latitudeCluster, LoadBalancerReadyCondition, metav1.ConditionFalse,
+				LoadBalancerProvisionFailedReason, fmt.Sprintf("Failed to get server status: %v", err))
+			return err
+		}
+
+		// Check if server is ready
+		status := strings.ToLower(server.Status)
+		if status == "on" || status == "active" || status == "running" {
+			// Server is ready, update status
+			latitudeCluster.Status.LoadBalancer.Ready = true
+
+			// Get primary IP
+			var primaryIP string
+			if len(server.IPAddress) > 0 {
+				primaryIP = server.IPAddress[0]
+			}
+
+			if primaryIP == "" {
+				log.Info("Server is ready but has no IP address yet")
+				return fmt.Errorf("server is ready but has no IP address")
+			}
+
+			latitudeCluster.Status.LoadBalancer.InternalIP = primaryIP
+			latitudeCluster.Status.LoadBalancer.PublicIP = primaryIP
+
+			// Set control plane endpoint to load balancer IP
+			apiPort := latitudeCluster.Spec.LoadBalancer.Port
+			if apiPort == 0 {
+				apiPort = DefaultAPIPort
+			}
+			latitudeCluster.Status.ControlPlaneEndpoint = infrav1.APIEndpoint{
+				Host: primaryIP,
+				Port: apiPort,
+			}
+
+			r.setCondition(latitudeCluster, LoadBalancerReadyCondition, metav1.ConditionTrue,
+				LoadBalancerReadyReason, "Load balancer is ready")
+			r.recorder.Eventf(latitudeCluster, corev1.EventTypeNormal, "LoadBalancerReady",
+				"Load balancer is ready at %s:%d", primaryIP, apiPort)
+
+			log.Info("Load balancer is ready", "ip", primaryIP, "port", apiPort)
+			return nil
+		}
+
+		// Server is not ready yet
+		log.Info("Load balancer server is not ready yet", "status", server.Status)
+		r.setCondition(latitudeCluster, LoadBalancerReadyCondition, metav1.ConditionFalse,
+			LoadBalancerProvisioningReason, fmt.Sprintf("Server status: %s", server.Status))
+		return fmt.Errorf("load balancer server not ready, status: %s", server.Status)
+	}
+
+	// Provision new load balancer
+	log.Info("Provisioning new HAProxy load balancer")
+
+	// Set defaults
+	plan := latitudeCluster.Spec.LoadBalancer.Plan
+	if plan == "" {
+		plan = DefaultLoadBalancerPlan
+	}
+
+	os := latitudeCluster.Spec.LoadBalancer.OperatingSystem
+	if os == "" {
+		os = DefaultLoadBalancerOS
+	}
+
+	apiPort := latitudeCluster.Spec.LoadBalancer.Port
+	if apiPort == 0 {
+		apiPort = DefaultAPIPort
+	}
+
+	statsPort := latitudeCluster.Spec.LoadBalancer.StatsPort
+	if statsPort == 0 {
+		statsPort = DefaultStatsPort
+	}
+
+	// Generate HAProxy cloud-init with empty backends (will be added later)
+	haproxyConfig := haproxy.Config{
+		APIPort:      apiPort,
+		StatsPort:    statsPort,
+		Backends:     []haproxy.Backend{}, // Empty initially
+		EnableStats:  statsPort > 0,
+		UpdateScript: true,
+	}
+
+	userDataBase64, err := haproxy.GenerateCloudInitBase64(haproxyConfig)
+	if err != nil {
+		log.Error(err, "failed to generate HAProxy cloud-init")
+		r.setCondition(latitudeCluster, LoadBalancerReadyCondition, metav1.ConditionFalse,
+			LoadBalancerProvisionFailedReason, fmt.Sprintf("Failed to generate cloud-init: %v", err))
+		return fmt.Errorf("failed to generate cloud-init: %w", err)
+	}
+
+	// Upload userdata to Latitude
+	userDataID, err := r.LatitudeClient.CreateUserData(ctx, latitude.CreateUserDataRequest{
+		Name:    fmt.Sprintf("%s-lb-userdata", latitudeCluster.Name),
+		Content: userDataBase64,
+	})
+	if err != nil {
+		log.Error(err, "failed to upload load balancer userdata")
+		r.setCondition(latitudeCluster, LoadBalancerReadyCondition, metav1.ConditionFalse,
+			LoadBalancerProvisionFailedReason, fmt.Sprintf("Failed to upload userdata: %v", err))
+		return fmt.Errorf("failed to upload userdata: %w", err)
+	}
+
+	log.Info("Uploaded load balancer userdata", "userDataID", userDataID)
+
+	// Create load balancer server
+	serverSpec := latitude.ServerSpec{
+		Project:         latitudeCluster.Spec.ProjectRef.ProjectID,
+		Site:            latitudeCluster.Spec.Location,
+		Plan:            plan,
+		OperatingSystem: os,
+		Hostname:        fmt.Sprintf("%s-lb", latitudeCluster.Name),
+		UserData:        userDataID,
+	}
+
+	server, err := r.LatitudeClient.CreateServer(ctx, serverSpec)
+	if err != nil {
+		log.Error(err, "failed to create load balancer server")
+		r.setCondition(latitudeCluster, LoadBalancerReadyCondition, metav1.ConditionFalse,
+			LoadBalancerProvisionFailedReason, fmt.Sprintf("Failed to create server: %v", err))
+		r.recorder.Eventf(latitudeCluster, corev1.EventTypeWarning, "LoadBalancerProvisionFailed",
+			"Failed to create load balancer: %v", err)
+		return fmt.Errorf("failed to create server: %w", err)
+	}
+
+	// Update status
+	latitudeCluster.Status.LoadBalancer.ServerID = server.ID
+	latitudeCluster.Status.LoadBalancer.Ready = false
+
+	r.setCondition(latitudeCluster, LoadBalancerReadyCondition, metav1.ConditionFalse,
+		LoadBalancerProvisioningReason, fmt.Sprintf("Load balancer server created: %s", server.ID))
+	r.recorder.Eventf(latitudeCluster, corev1.EventTypeNormal, "LoadBalancerProvisioning",
+		"Load balancer server created: %s", server.ID)
+
+	log.Info("Load balancer server created", "serverID", server.ID, "hostname", server.Hostname)
+
+	return fmt.Errorf("load balancer is provisioning, waiting for server to be ready")
 }
 
 func (r *LatitudeClusterReconciler) SetupWithManager(mgr ctrl.Manager) error {
