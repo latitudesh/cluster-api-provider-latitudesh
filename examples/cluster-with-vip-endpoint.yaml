@@ -1,0 +1,167 @@
+---
+# Example: Cluster with pre-allocated VIP as control plane endpoint
+#
+# This example demonstrates how to create a cluster using a pre-allocated VIP
+# directly as the control plane endpoint (without DNS).
+#
+# Prerequisites:
+# 1. Request VIP from Latitude.sh team before creating the cluster
+# 2. Obtain the VIP address (e.g., 10.0.1.100)
+#
+# Workflow:
+# 1. Create cluster with VIP in spec (10.0.1.100)
+# 2. First control plane (cp-0) is provisioned with primary IP (e.g., 10.0.1.10)
+# 3. Deploy kube-vip configured with the VIP (10.0.1.100)
+# 4. Bootstrap happens via VIP
+# 5. Provision additional control planes (cp-1, cp-2) for HA
+# 6. kube-vip manages VIP failover automatically
+#
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: default
+---
+apiVersion: cluster.x-k8s.io/v1beta1
+kind: Cluster
+metadata:
+  name: my-cluster-vip
+  namespace: default
+spec:
+  clusterNetwork:
+    pods:
+      cidrBlocks:
+        - 192.168.0.0/16
+    services:
+      cidrBlocks:
+        - 10.96.0.0/12
+  controlPlaneRef:
+    apiVersion: controlplane.cluster.x-k8s.io/v1beta1
+    kind: KubeadmControlPlane
+    name: my-cluster-vip-control-plane
+  infrastructureRef:
+    apiVersion: infrastructure.cluster.x-k8s.io/v1beta1
+    kind: LatitudeCluster
+    name: my-cluster-vip
+---
+apiVersion: infrastructure.cluster.x-k8s.io/v1beta1
+kind: LatitudeCluster
+metadata:
+  name: my-cluster-vip
+  namespace: default
+spec:
+  location: SAO
+  projectRef:
+    projectID: "your-latitude-project-id"
+  # Pre-allocated VIP as control plane endpoint
+  # This VIP must be requested from Latitude.sh team before cluster creation
+  controlPlaneEndpoint:
+    host: "10.0.1.100"  # Replace with your VIP
+    port: 6443
+---
+apiVersion: controlplane.cluster.x-k8s.io/v1beta1
+kind: KubeadmControlPlane
+metadata:
+  name: my-cluster-vip-control-plane
+  namespace: default
+spec:
+  replicas: 3  # HA setup with 3 control planes
+  version: v1.30.0
+  machineTemplate:
+    infrastructureRef:
+      apiVersion: infrastructure.cluster.x-k8s.io/v1beta1
+      kind: LatitudeMachineTemplate
+      name: my-cluster-vip-control-plane
+  kubeadmConfigSpec:
+    clusterConfiguration:
+      apiServer:
+        certSANs:
+          - "10.0.1.100"  # Add VIP to API server cert SANs
+      controllerManager:
+        extraArgs:
+          enable-hostpath-provisioner: "true"
+      networking:
+        podSubnet: 192.168.0.0/16
+        serviceSubnet: 10.96.0.0/12
+    initConfiguration:
+      nodeRegistration:
+        kubeletExtraArgs:
+          provider-id: "latitude://{{ ds.meta_data.instance_id }}"
+    joinConfiguration:
+      nodeRegistration:
+        kubeletExtraArgs:
+          provider-id: "latitude://{{ ds.meta_data.instance_id }}"
+    # Pre-kubeadm hook to install kube-vip before bootstrap
+    preKubeadmCommands:
+      - |
+        # Install kube-vip static pod manifest
+        # This ensures the VIP is available before kubeadm init
+        cat > /etc/kubernetes/manifests/kube-vip.yaml <<EOF
+        apiVersion: v1
+        kind: Pod
+        metadata:
+          name: kube-vip
+          namespace: kube-system
+        spec:
+          containers:
+          - name: kube-vip
+            image: ghcr.io/kube-vip/kube-vip:v0.7.0
+            imagePullPolicy: IfNotPresent
+            args:
+            - manager
+            env:
+            - name: vip_arp
+              value: "false"
+            - name: vip_interface
+              value: "eth0"
+            - name: address
+              value: "10.0.1.100"  # VIP address
+            - name: port
+              value: "6443"
+            - name: vip_cidr
+              value: "32"
+            - name: cp_enable
+              value: "true"
+            - name: cp_namespace
+              value: "kube-system"
+            - name: svc_enable
+              value: "false"
+            - name: bgp_enable
+              value: "true"
+            - name: bgp_routerid
+              valueFrom:
+                fieldRef:
+                  fieldPath: status.podIP
+            - name: bgp_as
+              value: "65000"
+            - name: bgp_peeraddress
+              value: "10.0.1.1"  # Latitude router IP
+            - name: bgp_peerpass
+              value: ""
+            - name: bgp_peeras
+              value: "65001"  # Latitude ASN
+            securityContext:
+              capabilities:
+                add:
+                - NET_ADMIN
+                - NET_RAW
+            volumeMounts:
+            - mountPath: /etc/kubernetes/admin.conf
+              name: kubeconfig
+          hostNetwork: true
+          volumes:
+          - name: kubeconfig
+            hostPath:
+              path: /etc/kubernetes/admin.conf
+        EOF
+---
+apiVersion: infrastructure.cluster.x-k8s.io/v1beta1
+kind: LatitudeMachineTemplate
+metadata:
+  name: my-cluster-vip-control-plane
+  namespace: default
+spec:
+  template:
+    spec:
+      plan: c3.small.x86
+      operatingSystem: ubuntu_22_04
+      hostname: "cp-{{ .Machine.Name }}"

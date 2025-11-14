@@ -284,16 +284,50 @@ func (r *LatitudeClusterReconciler) setCondition(latitudeCluster *infrav1.Latitu
 	latitudeCluster.Status.Conditions = append(latitudeCluster.Status.Conditions, condition)
 }
 
-// setupControlPlaneEndpoint discovers the first ready control plane machine and sets the endpoint
+// setupControlPlaneEndpoint sets up the control plane endpoint.
+// It supports two modes:
+// 1. User-provided endpoint (DNS name or VIP): Uses spec.controlPlaneEndpoint if set
+// 2. Auto-discovery: Discovers the first ready control plane machine's IP
 // Returns (endpointSet bool, error)
 func (r *LatitudeClusterReconciler) setupControlPlaneEndpoint(ctx context.Context, latitudeCluster *infrav1.LatitudeCluster, cluster *clusterv1.Cluster) (bool, error) {
 	log := crlog.FromContext(ctx)
 
-	// If control plane endpoint is already set, nothing to do
+	// If control plane endpoint is already set in status, nothing to do
 	if latitudeCluster.Status.ControlPlaneEndpoint.Host != "" {
 		log.V(1).Info("Control plane endpoint already set",
 			"host", latitudeCluster.Status.ControlPlaneEndpoint.Host,
 			"port", latitudeCluster.Status.ControlPlaneEndpoint.Port)
+		return true, nil
+	}
+
+	// If user provided a control plane endpoint in spec (e.g., DNS name or pre-allocated VIP), use it
+	// This enables DNS-based HA setups where:
+	// 1. DNS initially points to first control plane's primary IP
+	// 2. User requests additional VIP from Latitude.sh team
+	// 3. User updates DNS to point to the VIP
+	// 4. kube-vip manages the VIP for HA
+	if latitudeCluster.Spec.ControlPlaneEndpoint.Host != "" {
+		log.Info("Using user-provided control plane endpoint from spec",
+			"host", latitudeCluster.Spec.ControlPlaneEndpoint.Host,
+			"port", latitudeCluster.Spec.ControlPlaneEndpoint.Port)
+
+		// Set default port if not specified
+		port := latitudeCluster.Spec.ControlPlaneEndpoint.Port
+		if port == 0 {
+			port = 6443
+		}
+
+		latitudeCluster.Status.ControlPlaneEndpoint = infrav1.APIEndpoint{
+			Host: latitudeCluster.Spec.ControlPlaneEndpoint.Host,
+			Port: port,
+		}
+
+		r.setCondition(latitudeCluster, ClusterReadyCondition, metav1.ConditionTrue, ControlPlaneEndpointSetReason,
+			fmt.Sprintf("Using user-provided control plane endpoint: %s:%d", latitudeCluster.Spec.ControlPlaneEndpoint.Host, port))
+
+		r.recorder.Eventf(latitudeCluster, corev1.EventTypeNormal, "ControlPlaneEndpointSet",
+			"Using user-provided control plane endpoint: %s:%d", latitudeCluster.Spec.ControlPlaneEndpoint.Host, port)
+
 		return true, nil
 	}
 

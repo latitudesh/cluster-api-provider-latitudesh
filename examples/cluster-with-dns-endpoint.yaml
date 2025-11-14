@@ -1,0 +1,124 @@
+---
+# Example: Cluster with DNS-based control plane endpoint
+#
+# This example demonstrates how to create a cluster using a DNS name for the
+# control plane endpoint, enabling HA setups with kube-vip or load balancers.
+#
+# Workflow:
+# 1. Create cluster with DNS name (my-cluster.cp.example.com)
+# 2. First control plane (cp-0) is provisioned with primary IP (e.g., 10.0.1.10)
+# 3. Update DNS to point to cp-0's IP: my-cluster.cp.example.com → 10.0.1.10
+# 4. Bootstrap happens via DNS
+# 5. Request VIP from Latitude.sh team (e.g., 10.0.1.100)
+# 6. Deploy kube-vip configured with the VIP
+# 7. Update DNS to point to VIP: my-cluster.cp.example.com → 10.0.1.100
+# 8. Provision additional control planes (cp-1, cp-2) for HA
+# 9. kube-vip manages VIP failover automatically
+#
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: default
+---
+apiVersion: cluster.x-k8s.io/v1beta1
+kind: Cluster
+metadata:
+  name: my-cluster-dns
+  namespace: default
+spec:
+  clusterNetwork:
+    pods:
+      cidrBlocks:
+        - 192.168.0.0/16
+    services:
+      cidrBlocks:
+        - 10.96.0.0/12
+  controlPlaneRef:
+    apiVersion: controlplane.cluster.x-k8s.io/v1beta1
+    kind: KubeadmControlPlane
+    name: my-cluster-dns-control-plane
+  infrastructureRef:
+    apiVersion: infrastructure.cluster.x-k8s.io/v1beta1
+    kind: LatitudeCluster
+    name: my-cluster-dns
+---
+apiVersion: infrastructure.cluster.x-k8s.io/v1beta1
+kind: LatitudeCluster
+metadata:
+  name: my-cluster-dns
+  namespace: default
+spec:
+  location: SAO
+  projectRef:
+    projectID: "your-latitude-project-id"
+  # DNS-based control plane endpoint
+  # This DNS name will initially point to the first control plane's IP,
+  # then be updated to point to the VIP once kube-vip is configured
+  controlPlaneEndpoint:
+    host: my-cluster.cp.example.com  # Replace with your DNS name
+    port: 6443
+---
+apiVersion: controlplane.cluster.x-k8s.io/v1beta1
+kind: KubeadmControlPlane
+metadata:
+  name: my-cluster-dns-control-plane
+  namespace: default
+spec:
+  replicas: 3  # HA setup with 3 control planes
+  version: v1.30.0
+  machineTemplate:
+    infrastructureRef:
+      apiVersion: infrastructure.cluster.x-k8s.io/v1beta1
+      kind: LatitudeMachineTemplate
+      name: my-cluster-dns-control-plane
+  kubeadmConfigSpec:
+    clusterConfiguration:
+      apiServer:
+        certSANs:
+          - my-cluster.cp.example.com  # Add DNS name to API server cert SANs
+      controllerManager:
+        extraArgs:
+          enable-hostpath-provisioner: "true"
+      networking:
+        podSubnet: 192.168.0.0/16
+        serviceSubnet: 10.96.0.0/12
+    initConfiguration:
+      nodeRegistration:
+        kubeletExtraArgs:
+          provider-id: "latitude://{{ ds.meta_data.instance_id }}"
+    joinConfiguration:
+      nodeRegistration:
+        kubeletExtraArgs:
+          provider-id: "latitude://{{ ds.meta_data.instance_id }}"
+    # Post-bootstrap hook to install kube-vip (optional)
+    postKubeadmCommands:
+      - echo "Bootstrap complete. Deploy kube-vip manually with VIP configuration."
+---
+apiVersion: infrastructure.cluster.x-k8s.io/v1beta1
+kind: LatitudeMachineTemplate
+metadata:
+  name: my-cluster-dns-control-plane
+  namespace: default
+spec:
+  template:
+    spec:
+      plan: c3.small.x86
+      operatingSystem: ubuntu_22_04
+      hostname: "cp-{{ .Machine.Name }}"
+---
+# Optional: kube-vip ConfigMap for reference
+# Deploy this after the first control plane is up and you have the VIP
+#
+# apiVersion: v1
+# kind: ConfigMap
+# metadata:
+#   name: kubevip
+#   namespace: kube-system
+# data:
+#   vip_address: "10.0.1.100"  # VIP provided by Latitude.sh
+#   vip_interface: "eth0"
+#   bgp_enable: "true"
+#   bgp_routerid: "10.0.1.10"  # First control plane's IP
+#   bgp_as: "65000"            # Your ASN
+#   bgp_peeraddress: "10.0.1.1"  # Latitude router IP
+#   bgp_peeras: "65001"        # Latitude ASN
