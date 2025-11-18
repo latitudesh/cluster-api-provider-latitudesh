@@ -10,10 +10,24 @@ type LatitudeMachineTemplateSpec struct {
 
 type LatitudeMachineTemplateResource struct {
 	// Standard object's metadata.
-	// More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#metadata
 	// +optional
-	ObjectMeta metav1.ObjectMeta `json:"metadata,omitempty"`
+	ObjectMeta `json:"metadata,omitempty"`
 	Spec       LatitudeMachineSpec `json:"spec,omitempty"`
+}
+
+// ObjectMeta is metadata that all persisted resources must have, which includes all objects
+// users must create. This is a copy of customizable fields from metav1.ObjectMeta.
+type ObjectMeta struct {
+	// Map of string keys and values that can be used to organize and categorize
+	// (scope and select) objects. May match selectors of replication controllers
+	// and services.
+	// +optional
+	Labels map[string]string `json:"labels,omitempty"`
+
+	// Annotations is an unstructured key value map stored with a resource that may be
+	// set by external tools to store and retrieve arbitrary metadata.
+	// +optional
+	Annotations map[string]string `json:"annotations,omitempty"`
 }
 
 // +kubebuilder:object:root=true
