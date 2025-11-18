@@ -493,6 +493,26 @@ func (m *mockLatitudeClient) CreateServer(ctx context.Context, spec latitude.Ser
 	return server, nil
 }
 
+func (m *mockLatitudeClient) ReinstallServer(ctx context.Context, serverID string, spec latitude.ServerSpec) (*latitude.Server, error) {
+	if m.createServerError != nil {
+		return nil, m.createServerError
+	}
+
+	status := "provisioning"
+	if m.nextServerStatus != "" {
+		status = m.nextServerStatus
+	}
+
+	server := &latitude.Server{
+		ID:       serverID,
+		Status:   status,
+		Hostname: spec.Hostname,
+	}
+
+	m.servers[serverID] = server
+	return server, nil
+}
+
 func (m *mockLatitudeClient) GetServer(ctx context.Context, serverID string) (*latitude.Server, error) {
 	if m.getServerError != nil {
 		return nil, m.getServerError

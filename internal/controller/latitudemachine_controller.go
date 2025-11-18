@@ -39,7 +39,8 @@ import (
 // +kubebuilder:rbac:groups="",resources=configmaps,verbs=get;list;watch
 
 const (
-	LatitudeFinalizerName = "latitudemachine.infrastructure.cluster.x-k8s.io"
+	LatitudeFinalizerName      = "latitudemachine.infrastructure.cluster.x-k8s.io"
+	ExistingServerIDAnnotation = "latitude.sh/existing-server-id"
 )
 
 type LatitudeMachineReconciler struct {
@@ -223,16 +224,30 @@ func (r *LatitudeMachineReconciler) reconcileNormal(ctx context.Context, latitud
 func (r *LatitudeMachineReconciler) reconcileDelete(ctx context.Context, latitudeMachine *infrav1.LatitudeMachine) (ctrl.Result, error) {
 	log := crlog.FromContext(ctx)
 
-	if latitudeMachine.Status.ServerID != "" {
-		// Delete server from Latitude.sh
-		err := r.LatitudeClient.DeleteServer(ctx, latitudeMachine.Status.ServerID)
-		if err != nil {
-			log.Error(err, "failed to delete server", "serverID", latitudeMachine.Status.ServerID)
-			r.setCondition(latitudeMachine, infrav1.InstanceReadyCondition, metav1.ConditionFalse, infrav1.InstanceDeletionFailedReason, err.Error())
-			r.recorder.Eventf(latitudeMachine, corev1.EventTypeWarning, "FailedDelete", "Failed to delete server %s: %v", latitudeMachine.Status.ServerID, err)
-			return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
+	// Check if this server was from the pool (has existing-server-id annotation)
+	isPoolServer := false
+	if latitudeMachine.Annotations != nil {
+		if _, exists := latitudeMachine.Annotations[ExistingServerIDAnnotation]; exists {
+			isPoolServer = true
 		}
-		r.recorder.Eventf(latitudeMachine, corev1.EventTypeNormal, "SuccessfulDelete", "Deleted server %s", latitudeMachine.Status.ServerID)
+	}
+
+	if latitudeMachine.Status.ServerID != "" {
+		if isPoolServer {
+			// Server from pool - don't delete, just release it back
+			log.Info("Server from pool, skipping deletion (server should be released back to pool)", "serverID", latitudeMachine.Status.ServerID)
+			r.recorder.Eventf(latitudeMachine, corev1.EventTypeNormal, "ServerReleased", "Released pooled server %s back to pool", latitudeMachine.Status.ServerID)
+		} else {
+			// Regular server - delete it
+			err := r.LatitudeClient.DeleteServer(ctx, latitudeMachine.Status.ServerID)
+			if err != nil {
+				log.Error(err, "failed to delete server", "serverID", latitudeMachine.Status.ServerID)
+				r.setCondition(latitudeMachine, infrav1.InstanceReadyCondition, metav1.ConditionFalse, infrav1.InstanceDeletionFailedReason, err.Error())
+				r.recorder.Eventf(latitudeMachine, corev1.EventTypeWarning, "FailedDelete", "Failed to delete server %s: %v", latitudeMachine.Status.ServerID, err)
+				return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
+			}
+			r.recorder.Eventf(latitudeMachine, corev1.EventTypeNormal, "SuccessfulDelete", "Deleted server %s", latitudeMachine.Status.ServerID)
+		}
 	}
 
 	if latitudeMachine.Status.UserDataID != "" {
@@ -262,6 +277,19 @@ func (r *LatitudeMachineReconciler) reconcileServer(ctx context.Context, machine
 		duration := time.Since(start)
 		log.Info("Reconcile server duration", "duration", duration)
 	}()
+
+	// Check if we should use an existing server (reinstall mode)
+	existingServerID := ""
+	if latitudeMachine.Annotations != nil {
+		existingServerID = latitudeMachine.Annotations[ExistingServerIDAnnotation]
+	}
+
+	// If we have an existing server ID annotation but no status.ServerID, adopt it
+	if existingServerID != "" && latitudeMachine.Status.ServerID == "" {
+		log.Info("Found existing-server-id annotation, will reinstall server", "serverID", existingServerID)
+		latitudeMachine.Status.ServerID = existingServerID
+		// Don't return yet - proceed to reinstall
+	}
 
 	// If server already exists, check its status
 	if latitudeMachine.Status.ServerID != "" {
@@ -325,7 +353,7 @@ func (r *LatitudeMachineReconciler) reconcileServer(ctx context.Context, machine
 		return nil, fmt.Errorf("failed to get SSH keys: %w", err)
 	}
 
-	// Create new server
+	// Prepare server spec
 	spec := latitude.ServerSpec{
 		Project:         r.getProjectID(ctx, latitudeMachine),
 		Plan:            latitudeMachine.Spec.Plan,
@@ -336,16 +364,31 @@ func (r *LatitudeMachineReconciler) reconcileServer(ctx context.Context, machine
 		UserData:        udID,
 	}
 
-	server, err := r.LatitudeClient.CreateServer(ctx, spec)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create server: %w", err)
+	var server *latitude.Server
+
+	// Decide whether to create or reinstall
+	if existingServerID != "" {
+		// Reinstall existing server
+		log.Info("Reinstalling existing server", "serverID", existingServerID)
+		server, err = r.LatitudeClient.ReinstallServer(ctx, existingServerID, spec)
+		if err != nil {
+			return nil, fmt.Errorf("failed to reinstall server: %w", err)
+		}
+		log.Info("Reinstalled server", "serverID", server.ID, "duration", time.Since(start))
+	} else {
+		// Create new server
+		log.Info("Creating new server")
+		server, err = r.LatitudeClient.CreateServer(ctx, spec)
+		if err != nil {
+			return nil, fmt.Errorf("failed to create server: %w", err)
+		}
+		log.Info("Created server", "serverID", server.ID, "duration", time.Since(start))
 	}
 
 	latitudeMachine.Status.ServerID = server.ID
-	log.Info("Created server", "serverID", server.ID, "duration", time.Since(start))
 
 	if err := patchHelper.Patch(ctx, latitudeMachine, patch.WithStatusObservedGeneration{}); err != nil {
-		log.Error(err, "failed to persist status after CreateServer")
+		log.Error(err, "failed to persist status after server operation")
 	}
 
 	return nil, nil

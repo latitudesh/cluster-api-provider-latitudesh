@@ -9,10 +9,11 @@ import (
 
 // MockClient is a mock implementation of the Latitude client for testing
 type MockClient struct {
-	CreateServerFunc  func(ctx context.Context, spec latitude.ServerSpec) (*latitude.Server, error)
-	GetServerFunc     func(ctx context.Context, serverID string) (*latitude.Server, error)
-	DeleteServerFunc  func(ctx context.Context, serverID string) error
-	WaitForServerFunc func(ctx context.Context, serverID string, targetStatus string,
+	CreateServerFunc    func(ctx context.Context, spec latitude.ServerSpec) (*latitude.Server, error)
+	ReinstallServerFunc func(ctx context.Context, serverID string, spec latitude.ServerSpec) (*latitude.Server, error)
+	GetServerFunc       func(ctx context.Context, serverID string) (*latitude.Server, error)
+	DeleteServerFunc    func(ctx context.Context, serverID string) error
+	WaitForServerFunc   func(ctx context.Context, serverID string, targetStatus string,
 		timeout time.Duration) (*latitude.Server, error)
 	GetAvailablePlansFunc   func(ctx context.Context) ([]string, error)
 	GetAvailableRegionsFunc func(ctx context.Context) ([]string, error)
@@ -26,6 +27,18 @@ func (m *MockClient) CreateServer(ctx context.Context, spec latitude.ServerSpec)
 	}
 	return &latitude.Server{
 		ID:        "mock-server-id",
+		Status:    "on",
+		Hostname:  spec.Hostname,
+		IPAddress: []string{"192.168.1.1"},
+	}, nil
+}
+
+func (m *MockClient) ReinstallServer(ctx context.Context, serverID string, spec latitude.ServerSpec) (*latitude.Server, error) {
+	if m.ReinstallServerFunc != nil {
+		return m.ReinstallServerFunc(ctx, serverID, spec)
+	}
+	return &latitude.Server{
+		ID:        serverID,
 		Status:    "on",
 		Hostname:  spec.Hostname,
 		IPAddress: []string{"192.168.1.1"},

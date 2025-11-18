@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 
@@ -35,6 +36,7 @@ type Server struct {
 // ClientInterface defines the methods for interacting with Latitude.sh API
 type ClientInterface interface {
 	CreateServer(ctx context.Context, spec ServerSpec) (*Server, error)
+	ReinstallServer(ctx context.Context, serverID string, spec ServerSpec) (*Server, error)
 	GetServer(ctx context.Context, serverID string) (*Server, error)
 	DeleteServer(ctx context.Context, serverID string) error
 	WaitForServer(ctx context.Context, serverID string, targetStatus string, timeout time.Duration) (*Server, error)
@@ -155,6 +157,60 @@ func (c *Client) CreateServer(ctx context.Context, spec ServerSpec) (*Server, er
 	// Get status if available
 	if result.Server.Data.Attributes != nil && result.Server.Data.Attributes.Status != nil {
 		server.Status = string(*result.Server.Data.Attributes.Status)
+	}
+
+	return server, nil
+}
+
+// ReinstallServer reinstalls an existing server with new configuration
+func (c *Client) ReinstallServer(ctx context.Context, serverID string, spec ServerSpec) (*Server, error) {
+	// Validate required fields for reinstall
+	if spec.OperatingSystem == "" {
+		return nil, fmt.Errorf("operatingSystem is required for reinstall")
+	}
+	if spec.Hostname == "" {
+		return nil, fmt.Errorf("hostname is required for reinstall")
+	}
+
+	// Build reinstall request according to Latitude.sh API spec
+	attrs := &operations.CreateServerReinstallServersAttributes{
+		OperatingSystem: (*operations.CreateServerReinstallServersOperatingSystem)(&spec.OperatingSystem),
+		Hostname:        &spec.Hostname,
+		SSHKeys:         spec.SSHKeys,
+	}
+
+	// Add user data if provided (as int64 ID)
+	if spec.UserData != "" {
+		// Convert UserData ID from string to int64
+		userDataID, err := strconv.ParseInt(spec.UserData, 10, 64)
+		if err != nil {
+			return nil, fmt.Errorf("invalid userdata ID format: %w", err)
+		}
+		attrs.UserData = &userDataID
+	}
+
+	// Create reinstall request
+	reinstallRequest := operations.CreateServerReinstallServersRequestBody{
+		Data: operations.CreateServerReinstallServersData{
+			Type:       operations.CreateServerReinstallServersTypeReinstalls,
+			Attributes: attrs,
+		},
+	}
+
+	// Send request
+	result, err := c.sdk.Servers.Reinstall(ctx, serverID, reinstallRequest)
+	if err != nil {
+		return nil, fmt.Errorf("failed to reinstall server: %w", err)
+	}
+
+	if result.HTTPMeta.Response.StatusCode < 200 || result.HTTPMeta.Response.StatusCode >= 300 {
+		return nil, fmt.Errorf("reinstall request failed with status code: %d", result.HTTPMeta.Response.StatusCode)
+	}
+
+	// Get the reinstalled server info
+	server, err := c.GetServer(ctx, serverID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get server after reinstall: %w", err)
 	}
 
 	return server, nil

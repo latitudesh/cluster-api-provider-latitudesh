@@ -1,0 +1,201 @@
+---
+# RKE2 Cluster Using Server Pool (Reinstall API)
+# This example shows how to deploy an RKE2 cluster using pre-allocated servers
+#
+# Benefits:
+#   - Much faster provisioning (reinstall ~5min vs create ~20min)
+#   - Predictable inventory management
+#   - Servers are preserved when cluster is deleted
+#
+# Prerequisites:
+# 1. Pre-allocated Latitude.sh servers in your project
+# 2. Set your Latitude.sh API key: export LATITUDE_API_KEY=your-key
+# 3. Update the placeholders below marked with # CHANGE THIS
+#
+# Deploy:
+#   kubectl apply -f examples/rke2-cluster-with-server-pool.yaml
+#
+# Get kubeconfig (after cluster is ready):
+#   clusterctl get kubeconfig rke2-pooled > rke2-pooled.kubeconfig
+#   export KUBECONFIG=rke2-pooled.kubeconfig
+#   kubectl get nodes
+
+apiVersion: cluster.x-k8s.io/v1beta1
+kind: Cluster
+metadata:
+  name: rke2-pooled
+  namespace: default
+spec:
+  clusterNetwork:
+    pods:
+      cidrBlocks: ["10.244.0.0/16"]
+    services:
+      cidrBlocks: ["10.96.0.0/12"]
+  controlPlaneEndpoint:
+    host: rke2-pooled.example.com  # CHANGE THIS: Your DNS name or leave empty for auto-discovery
+    port: 6443
+  controlPlaneRef:
+    apiVersion: controlplane.cluster.x-k8s.io/v1beta1
+    kind: RKE2ControlPlane
+    name: rke2-pooled-cp
+  infrastructureRef:
+    apiVersion: infrastructure.cluster.x-k8s.io/v1beta1
+    kind: LatitudeCluster
+    name: rke2-pooled
+---
+apiVersion: infrastructure.cluster.x-k8s.io/v1beta1
+kind: LatitudeCluster
+metadata:
+  name: rke2-pooled
+  namespace: default
+spec:
+  location: "SAO2"  # CHANGE THIS: Your Latitude.sh location
+  projectRef:
+    projectID: "<YOUR_PROJECT_ID>"  # CHANGE THIS: Get from https://www.latitude.sh/dashboard
+---
+# Control Plane Machine Template with Server Pool
+# This uses an existing server from your pool
+apiVersion: infrastructure.cluster.x-k8s.io/v1beta1
+kind: LatitudeMachineTemplate
+metadata:
+  name: rke2-pooled-cp
+  namespace: default
+spec:
+  template:
+    metadata:
+      annotations:
+        # IMPORTANT: This annotation tells the controller to REINSTALL an existing server
+        # instead of creating a new one. The server will be wiped and provisioned fresh.
+        latitude.sh/existing-server-id: "<YOUR_SERVER_ID>"  # CHANGE THIS: e.g., srv_abc123xyz
+    spec:
+      # Note: plan is ignored for reinstall (server already exists with its plan)
+      # but we keep it for documentation/reference purposes
+      plan: "c2-small-x86"  # Server's actual plan
+      operatingSystem: "ubuntu_24_04_x64_lts"
+      sshKeySecretRef:
+        name: my-ssh-keys  # CHANGE THIS: Your SSH keys secret
+        namespace: default
+---
+apiVersion: controlplane.cluster.x-k8s.io/v1beta1
+kind: RKE2ControlPlane
+metadata:
+  name: rke2-pooled-cp
+  namespace: default
+spec:
+  replicas: 1  # Single node for this example
+  version: v1.30.0+rke2r1  # RKE2 version
+  infrastructureRef:
+    apiVersion: infrastructure.cluster.x-k8s.io/v1beta1
+    kind: LatitudeMachineTemplate
+    name: rke2-pooled-cp
+  agentConfig:
+    nodeName: '{{ ds.meta_data.hostname }}'
+  serverConfig:
+    cni: calico  # RKE2 will install Calico CNI automatically
+    # Disable servicelb (if you plan to use MetalLB or another LB)
+    disableComponents:
+      - servicelb
+  registrationMethod: internal-first
+  preRKE2Commands:
+    # System preparation
+    - swapoff -a
+    - sed -i '/ swap / s/^\(.*\)$/#\1/g' /etc/fstab
+    # Basic firewall configuration
+    - ufw --force enable
+    - ufw default deny incoming
+    - ufw default allow outgoing
+    - ufw allow 22/tcp       # SSH
+    - ufw allow 6443/tcp     # Kubernetes API
+    - ufw allow 9345/tcp     # RKE2 supervisor API
+    - ufw allow 10250/tcp    # kubelet
+    - ufw allow 4789/udp     # VXLAN for Calico
+    - ufw allow 179/tcp      # BGP (if using BGP for networking)
+    - ufw --force enable
+---
+# Example: Worker nodes from pool (optional)
+# Uncomment and configure if you need worker nodes
+#
+# apiVersion: cluster.x-k8s.io/v1beta1
+# kind: MachineDeployment
+# metadata:
+#   name: rke2-pooled-workers
+#   namespace: default
+# spec:
+#   clusterName: rke2-pooled
+#   replicas: 2
+#   selector:
+#     matchLabels:
+#       cluster.x-k8s.io/cluster-name: rke2-pooled
+#   template:
+#     metadata:
+#       labels:
+#         cluster.x-k8s.io/cluster-name: rke2-pooled
+#     spec:
+#       clusterName: rke2-pooled
+#       version: v1.30.0+rke2r1
+#       bootstrap:
+#         configRef:
+#           apiVersion: bootstrap.cluster.x-k8s.io/v1beta1
+#           kind: RKE2ConfigTemplate
+#           name: rke2-pooled-workers
+#       infrastructureRef:
+#         apiVersion: infrastructure.cluster.x-k8s.io/v1beta1
+#         kind: LatitudeMachineTemplate
+#         name: rke2-pooled-worker-0  # Note: Each worker needs its own template with different server ID
+# ---
+# # Worker Machine Template 1
+# apiVersion: infrastructure.cluster.x-k8s.io/v1beta1
+# kind: LatitudeMachineTemplate
+# metadata:
+#   name: rke2-pooled-worker-0
+#   namespace: default
+# spec:
+#   template:
+#     metadata:
+#       annotations:
+#         latitude.sh/existing-server-id: "<YOUR_WORKER_SERVER_ID_1>"  # CHANGE THIS
+#     spec:
+#       plan: "c2-small-x86"
+#       operatingSystem: "ubuntu_24_04_x64_lts"
+#       sshKeySecretRef:
+#         name: my-ssh-keys
+#         namespace: default
+# ---
+# # Worker Machine Template 2
+# apiVersion: infrastructure.cluster.x-k8s.io/v1beta1
+# kind: LatitudeMachineTemplate
+# metadata:
+#   name: rke2-pooled-worker-1
+#   namespace: default
+# spec:
+#   template:
+#     metadata:
+#       annotations:
+#         latitude.sh/existing-server-id: "<YOUR_WORKER_SERVER_ID_2>"  # CHANGE THIS
+#     spec:
+#       plan: "c2-small-x86"
+#       operatingSystem: "ubuntu_24_04_x64_lts"
+#       sshKeySecretRef:
+#         name: my-ssh-keys
+#         namespace: default
+# ---
+# # Worker Bootstrap Config
+# apiVersion: bootstrap.cluster.x-k8s.io/v1beta1
+# kind: RKE2ConfigTemplate metadata: name: rke2-pooled-workers
+#   namespace: default
+# spec:
+#   template:
+#     spec:
+#       agentConfig:
+#         nodeName: '{{ ds.meta_data.hostname }}'
+#       preRKE2Commands:
+#         - swapoff -a
+#         - sed -i '/ swap / s/^\(.*\)$/#\1/g' /etc/fstab
+#         - ufw --force enable
+#         - ufw default deny incoming
+#         - ufw default allow outgoing
+#         - ufw allow 22/tcp
+#         - ufw allow 10250/tcp
+#         - ufw allow 4789/udp
+#         - ufw allow 179/tcp
+#         - ufw --force enable
