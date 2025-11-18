@@ -21,6 +21,7 @@ limitations under the License.
 package v1beta1
 
 import (
+	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1"
 	runtime "k8s.io/apimachinery/pkg/runtime"
 	apiv1beta1 "sigs.k8s.io/cluster-api/api/v1beta1"
@@ -211,10 +212,10 @@ func (in *LatitudeMachineSpec) DeepCopyInto(out *LatitudeMachineSpec) {
 		*out = new(string)
 		**out = **in
 	}
-	if in.SSHKeys != nil {
-		in, out := &in.SSHKeys, &out.SSHKeys
-		*out = make([]string, len(*in))
-		copy(*out, *in)
+	if in.SSHKeySecretRef != nil {
+		in, out := &in.SSHKeySecretRef, &out.SSHKeySecretRef
+		*out = new(corev1.SecretReference)
+		**out = **in
 	}
 }
 

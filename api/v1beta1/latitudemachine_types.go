@@ -1,6 +1,7 @@
 package v1beta1
 
 import (
+	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	clusterv1 "sigs.k8s.io/cluster-api/api/v1beta1"
 )
@@ -18,8 +19,11 @@ type LatitudeMachineSpec struct {
 	// Plan is the server plan slug
 	Plan string `json:"plan"`
 
-	// SSHKeys is a list of SSH key IDs to be installed on the server
-	SSHKeys []string `json:"sshKeys,omitempty"`
+	// SSHKeySecretRef references a Kubernetes Secret containing SSH key IDs.
+	// The Secret must contain a key with a comma-separated list of SSH key IDs.
+	// Example: "ssh_abc123,ssh_def456"
+	// +optional
+	SSHKeySecretRef *corev1.SecretReference `json:"sshKeySecretRef,omitempty"`
 }
 
 type LatitudeMachineStatus struct {
