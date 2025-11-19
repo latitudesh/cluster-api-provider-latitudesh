@@ -1,0 +1,346 @@
+---
+# PHASE 3: Scale to 3 Control Planes + 2 Workers with RKE2
+# This scales the cluster to full HA after kube-vip is configured
+#
+# PREREQUISITES:
+# 1. Phase 1 completed (1 CP running)
+# 2. VIP obtained from Latitude.sh team
+# 3. kube-vip installed on first CP using install-kubevip.sh
+# 4. VIP is active (verify with: ssh ubuntu@<CP_IP> "ip addr show | grep <VIP>")
+#
+# IMPORTANT: Replace ALL instances of "YOUR_VIP_HERE" with your actual VIP
+# Example: If your VIP is 100.64.208.100, replace "YOUR_VIP_HERE" with "100.64.208.100"
+#
+# DEPLOYMENT:
+# 1. Edit this file and replace YOUR_VIP_HERE with your actual VIP
+# 2. kubectl apply -f phase3-ha-cluster-rke2.yaml
+# 3. Monitor: kubectl get machines,kubeadmcontrolplane -w
+# 4. Wait for 3 CPs and 2 workers to be ready
+# 5. Get kubeconfig: clusterctl get kubeconfig ha-test-nyc > ha-test-nyc.kubeconfig
+# 6. Test: kubectl --kubeconfig=ha-test-nyc.kubeconfig get nodes
+
+apiVersion: cluster.x-k8s.io/v1beta1
+kind: Cluster
+metadata:
+  name: ha-test-nyc
+  namespace: default
+spec:
+  clusterNetwork:
+    pods:
+      cidrBlocks: ["10.244.0.0/16"]
+    services:
+      cidrBlocks: ["10.96.0.0/12"]
+  controlPlaneEndpoint:
+    host: "YOUR_VIP_HERE"  # ⚠️ REPLACE WITH YOUR VIP (e.g., 100.64.208.100)
+    port: 6443
+  controlPlaneRef:
+    apiVersion: controlplane.cluster.x-k8s.io/v1beta1
+    kind: RKE2ControlPlane
+    name: ha-test-nyc-control-plane
+  infrastructureRef:
+    apiVersion: infrastructure.cluster.x-k8s.io/v1beta1
+    kind: LatitudeCluster
+    name: ha-test-nyc
+---
+apiVersion: infrastructure.cluster.x-k8s.io/v1beta1
+kind: LatitudeCluster
+metadata:
+  name: ha-test-nyc
+  namespace: default
+spec:
+  location: "NYC"
+  projectRef:
+    projectID: "<YOUR_PROJECT_ID>"
+---
+# Control Plane Machine Template (unchanged)
+apiVersion: infrastructure.cluster.x-k8s.io/v1beta1
+kind: LatitudeMachineTemplate
+metadata:
+  name: ha-test-nyc-control-plane
+  namespace: default
+spec:
+  template:
+    spec:
+      plan: "c2-medium-x86"
+      operatingSystem: "ubuntu_24_04_x64_lts"
+      sshKeySecretRef:
+        name: latitude-ssh-keys
+        namespace: default
+---
+# RKE2 Control Plane Configuration - PHASE 3: 3 nodes for HA
+apiVersion: controlplane.cluster.x-k8s.io/v1beta1
+kind: RKE2ControlPlane
+metadata:
+  name: ha-test-nyc-control-plane
+  namespace: default
+spec:
+  replicas: 3  # PHASE 3: Scale to 3 CPs for HA
+  version: v1.30.0+rke2r1
+  infrastructureRef:
+    apiVersion: infrastructure.cluster.x-k8s.io/v1beta1
+    kind: LatitudeMachineTemplate
+    name: ha-test-nyc-control-plane
+  agentConfig:
+    nodeName: '{{ ds.meta_data.hostname }}'
+  serverConfig:
+    cni: calico
+    tlsSan:
+      - "YOUR_VIP_HERE"  # ⚠️ REPLACE WITH YOUR VIP
+      - 127.0.0.1
+      - localhost
+  registrationMethod: internal-first
+  rolloutStrategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+  preRKE2Commands:
+    # Essential firewall rules
+    - ufw --force enable
+    - ufw default deny incoming
+    - ufw default allow outgoing
+    - ufw allow 22/tcp
+    - ufw allow 6443/tcp
+    - ufw allow 9345/tcp
+    - ufw allow 2379:2380/tcp
+    - ufw allow 10250/tcp
+    - ufw allow 10259/tcp
+    - ufw allow 10257/tcp
+    - ufw allow 4789/udp
+    - ufw --force enable
+  files:
+    # kube-vip static pod manifest for control plane VIP
+    - path: /var/lib/rancher/rke2/server/manifests/kube-vip.yaml
+      owner: root:root
+      permissions: "0644"
+      content: |
+        apiVersion: v1
+        kind: Pod
+        metadata:
+          name: kube-vip
+          namespace: kube-system
+        spec:
+          containers:
+          - name: kube-vip
+            image: ghcr.io/kube-vip/kube-vip:v0.8.0
+            imagePullPolicy: IfNotPresent
+            args:
+            - manager
+            env:
+            - name: vip_arp
+              value: "true"
+            - name: port
+              value: "6443"
+            - name: vip_interface
+              value: "ens3"
+            - name: vip_cidr
+              value: "32"
+            - name: cp_enable
+              value: "true"
+            - name: cp_namespace
+              value: kube-system
+            - name: vip_ddns
+              value: "false"
+            - name: svc_enable
+              value: "false"
+            - name: vip_leaderelection
+              value: "true"
+            - name: vip_leaseduration
+              value: "15"
+            - name: vip_renewdeadline
+              value: "10"
+            - name: vip_retryperiod
+              value: "2"
+            - name: vip_address
+              value: "YOUR_VIP_HERE"
+            - name: prometheus_server
+              value: ":2112"
+            securityContext:
+              capabilities:
+                add:
+                - NET_ADMIN
+                - NET_RAW
+            volumeMounts:
+            - mountPath: /etc/kubernetes/admin.conf
+              name: kubeconfig
+            resources:
+              requests:
+                cpu: 50m
+                memory: 64Mi
+          hostAliases:
+          - hostnames:
+            - kubernetes
+            ip: 127.0.0.1
+          hostNetwork: true
+          volumes:
+          - name: kubeconfig
+            hostPath:
+              path: /etc/rancher/rke2/rke2.yaml
+              type: FileOrCreate
+  postRKE2Commands:
+    # Wait for RKE2 to be ready
+    - export KUBECONFIG=/etc/rancher/rke2/rke2.yaml
+    - sleep 30
+
+    # Wait for kube-vip VIP to be active
+    - |
+      for i in {1..30}; do
+        if ip addr show ens3 | grep -q "YOUR_VIP_HERE"; then
+          echo "VIP is active on this node"
+          break
+        fi
+        echo "Waiting for VIP... ($i/30)"
+        sleep 10
+      done
+
+    # Install kube-vip RBAC (only first node will succeed, others will skip)
+    - kubectl apply -f https://kube-vip.io/manifests/rbac.yaml || true
+
+    # Install kube-vip cloud provider for LoadBalancer services
+    - kubectl apply -f https://raw.githubusercontent.com/kube-vip/kube-vip-cloud-provider/main/manifest/kube-vip-cloud-controller.yaml || true
+
+    # Create kube-vip DaemonSet for LoadBalancer services
+    - |
+      cat <<'KVEOF' | kubectl apply -f - || true
+      apiVersion: apps/v1
+      kind: DaemonSet
+      metadata:
+        name: kube-vip-ds
+        namespace: kube-system
+        labels:
+          app: kube-vip-ds
+      spec:
+        selector:
+          matchLabels:
+            app: kube-vip-ds
+        template:
+          metadata:
+            labels:
+              app: kube-vip-ds
+          spec:
+            hostNetwork: true
+            serviceAccountName: kube-vip
+            tolerations:
+            - effect: NoSchedule
+              operator: Exists
+            - effect: NoExecute
+              operator: Exists
+            containers:
+            - name: kube-vip
+              image: ghcr.io/kube-vip/kube-vip:v0.8.0
+              imagePullPolicy: IfNotPresent
+              args:
+              - manager
+              env:
+              - name: vip_arp
+                value: "true"
+              - name: port
+                value: "6443"
+              - name: vip_interface
+                value: "ens3"
+              - name: vip_cidr
+                value: "32"
+              - name: vip_ddns
+                value: "false"
+              - name: svc_enable
+                value: "true"
+              - name: svc_election
+                value: "true"
+              - name: lb_enable
+                value: "true"
+              - name: lb_port
+                value: "6443"
+              - name: prometheus_server
+                value: ":2112"
+              securityContext:
+                capabilities:
+                  add:
+                  - NET_ADMIN
+                  - NET_RAW
+                  - SYS_TIME
+              resources:
+                requests:
+                  cpu: 50m
+                  memory: 64Mi
+      KVEOF
+
+    # Create ConfigMap for kube-vip IP range for LoadBalancer services
+    # Note: Adjust this range to match your subnet, avoid the VIP itself
+    - |
+      cat <<'CMEOF' | kubectl apply -f - || true
+      apiVersion: v1
+      kind: ConfigMap
+      metadata:
+        name: kubevip
+        namespace: kube-system
+      data:
+        range-global: "CHANGE_THIS_TO_YOUR_LB_RANGE"
+      CMEOF
+
+    - echo "Control plane node configured for HA"
+---
+# Worker Node Machine Template
+apiVersion: infrastructure.cluster.x-k8s.io/v1beta1
+kind: LatitudeMachineTemplate
+metadata:
+  name: ha-test-nyc-md-0
+  namespace: default
+spec:
+  template:
+    spec:
+      plan: "c2-small-x86"
+      operatingSystem: "ubuntu_24_04_x64_lts"
+      sshKeySecretRef:
+        name: latitude-ssh-keys
+        namespace: default
+---
+# Worker Node RKE2 Bootstrap Configuration
+apiVersion: bootstrap.cluster.x-k8s.io/v1beta1
+kind: RKE2ConfigTemplate
+metadata:
+  name: ha-test-nyc-md-0
+  namespace: default
+spec:
+  template:
+    spec:
+      agentConfig:
+        nodeName: '{{ ds.meta_data.hostname }}'
+      preRKE2Commands:
+        # Essential firewall rules
+        - ufw --force enable
+        - ufw default deny incoming
+        - ufw default allow outgoing
+        - ufw allow 22/tcp
+        - ufw allow 10250/tcp
+        - ufw allow 4789/udp
+        - ufw allow 30000:32767/tcp
+        - ufw --force enable
+---
+# Worker Node Deployment - 2 workers
+apiVersion: cluster.x-k8s.io/v1beta1
+kind: MachineDeployment
+metadata:
+  name: ha-test-nyc-md-0
+  namespace: default
+spec:
+  clusterName: ha-test-nyc
+  replicas: 2  # 2 Worker nodes
+  selector:
+    matchLabels:
+      cluster.x-k8s.io/deployment-name: ha-test-nyc-md-0
+  template:
+    metadata:
+      labels:
+        cluster.x-k8s.io/deployment-name: ha-test-nyc-md-0
+        cluster.x-k8s.io/cluster-name: ha-test-nyc
+    spec:
+      clusterName: ha-test-nyc
+      version: v1.30.0+rke2r1
+      bootstrap:
+        configRef:
+          apiVersion: bootstrap.cluster.x-k8s.io/v1beta1
+          kind: RKE2ConfigTemplate
+          name: ha-test-nyc-md-0
+      infrastructureRef:
+        apiVersion: infrastructure.cluster.x-k8s.io/v1beta1
+        kind: LatitudeMachineTemplate
+        name: ha-test-nyc-md-0

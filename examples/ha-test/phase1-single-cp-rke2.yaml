@@ -1,0 +1,116 @@
+---
+# PHASE 1: Single Control Plane with RKE2 (for VIP Discovery)
+# This creates 1 CP to discover the subnet and request VIP from Latitude.sh
+#
+# BEFORE APPLYING:
+# 1. Create SSH keys secret (see examples/external-secrets/README.md):
+#    kubectl create secret generic latitude-ssh-keys --from-literal=ssh-key-ids="ssh_abc123"
+# 2. Replace <YOUR_PROJECT_ID> with your Latitude.sh project ID
+# 3. Optionally change location from NYC to your preferred region
+#
+# STEPS AFTER DEPLOYMENT:
+# 1. Apply this manifest: kubectl apply -f phase1-single-cp-rke2.yaml
+# 2. Monitor: kubectl get machines,latitudemachines -w
+# 3. Get the server IP: kubectl get latitudemachine -o yaml | grep -A 5 addresses
+# 4. Note the subnet (e.g., 100.64.208.10 -> subnet is 100.64.208.0/24)
+# 5. Request VIP from Latitude.sh team (e.g., 100.64.208.100)
+# 6. Wait for VIP confirmation
+# 7. Run install-kubevip.sh script on the CP node
+# 8. Proceed to phase3-ha-cluster-rke2.yaml
+
+apiVersion: cluster.x-k8s.io/v1beta1
+kind: Cluster
+metadata:
+  name: ha-test-nyc
+  namespace: default
+spec:
+  clusterNetwork:
+    pods:
+      cidrBlocks: ["10.244.0.0/16"]
+    services:
+      cidrBlocks: ["10.96.0.0/12"]
+  # NOTE: No controlPlaneEndpoint set - will use auto-discovery
+  controlPlaneRef:
+    apiVersion: controlplane.cluster.x-k8s.io/v1beta1
+    kind: RKE2ControlPlane
+    name: ha-test-nyc-control-plane
+  infrastructureRef:
+    apiVersion: infrastructure.cluster.x-k8s.io/v1beta1
+    kind: LatitudeCluster
+    name: ha-test-nyc
+---
+apiVersion: infrastructure.cluster.x-k8s.io/v1beta1
+kind: LatitudeCluster
+metadata:
+  name: ha-test-nyc
+  namespace: default
+spec:
+  location: "NYC"  # Change to your preferred location
+  projectRef:
+    projectID: "<YOUR_PROJECT_ID>"  # Replace with your Latitude.sh project ID
+---
+# Control Plane Machine Template
+apiVersion: infrastructure.cluster.x-k8s.io/v1beta1
+kind: LatitudeMachineTemplate
+metadata:
+  name: ha-test-nyc-control-plane
+  namespace: default
+spec:
+  template:
+    spec:
+      plan: "c2-medium-x86"
+      operatingSystem: "ubuntu_24_04_x64_lts"
+      sshKeySecretRef:
+        name: latitude-ssh-keys  # Kubernetes secret containing SSH key IDs
+        namespace: default
+---
+# RKE2 Control Plane Configuration - PHASE 1: Single node
+apiVersion: controlplane.cluster.x-k8s.io/v1beta1
+kind: RKE2ControlPlane
+metadata:
+  name: ha-test-nyc-control-plane
+  namespace: default
+spec:
+  replicas: 1  # PHASE 1: Start with 1 CP only
+  version: v1.30.0+rke2r1
+  infrastructureRef:
+    apiVersion: infrastructure.cluster.x-k8s.io/v1beta1
+    kind: LatitudeMachineTemplate
+    name: ha-test-nyc-control-plane
+  agentConfig:
+    nodeName: '{{ ds.meta_data.hostname }}'
+  serverConfig:
+    cni: calico  # RKE2 installs Calico automatically
+    tlsSan:
+      - 127.0.0.1
+      - localhost
+  registrationMethod: internal-first
+  preRKE2Commands:
+    # Essential firewall rules
+    - ufw --force enable
+    - ufw default deny incoming
+    - ufw default allow outgoing
+    - ufw allow 22/tcp
+    - ufw allow 6443/tcp      # Kubernetes API
+    - ufw allow 9345/tcp      # RKE2 supervisor API
+    - ufw allow 2379:2380/tcp # etcd
+    - ufw allow 10250/tcp     # kubelet
+    - ufw allow 10259/tcp     # kube-scheduler
+    - ufw allow 10257/tcp     # kube-controller-manager
+    - ufw allow 4789/udp      # VXLAN
+    - ufw --force enable
+  postRKE2Commands:
+    # Wait for RKE2 to be ready
+    - export KUBECONFIG=/etc/rancher/rke2/rke2.yaml
+    - sleep 30
+
+    # Print node info for debugging
+    - echo "=== Phase 1 CP Ready ==="
+    - echo "Node IP addresses:"
+    - ip -4 addr show | grep inet
+    - echo "========================"
+    - echo "Next steps:"
+    - echo "1. Get this server's IP from 'kubectl get latitudemachine -o yaml'"
+    - echo "2. Request VIP from Latitude.sh in the same subnet"
+    - echo "3. Run install-kubevip.sh script on this node"
+    - echo "4. Apply phase3-ha-cluster-rke2.yaml"
