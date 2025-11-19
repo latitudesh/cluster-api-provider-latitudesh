@@ -294,7 +294,13 @@ func (r *LatitudeMachineReconciler) reconcileServer(ctx context.Context, machine
 	// If server already exists, check its status
 	// BUT: if we're in reinstall mode AND haven't created userdata yet, skip this check
 	needsReinstall := existingServerID != "" && latitudeMachine.Status.UserDataID == ""
+	log.Info("DEBUG: Checking early return conditions",
+		"existingServerID", existingServerID,
+		"serverID", latitudeMachine.Status.ServerID,
+		"userDataID", latitudeMachine.Status.UserDataID,
+		"needsReinstall", needsReinstall)
 	if latitudeMachine.Status.ServerID != "" && !needsReinstall {
+		log.Info("DEBUG: Entering early return check block - will check server status")
 		server, err := r.LatitudeClient.GetServer(ctx, latitudeMachine.Status.ServerID)
 		if err != nil {
 			// Server might have been deleted externally
@@ -305,15 +311,19 @@ func (r *LatitudeMachineReconciler) reconcileServer(ctx context.Context, machine
 			if strings.EqualFold(server.Status, "on") ||
 				strings.EqualFold(server.Status, "active") ||
 				strings.EqualFold(server.Status, "running") {
+				log.Info("DEBUG: Server is ready, returning early WITHOUT creating userdata")
 				return server, nil
 			}
 			// Server exists but not ready yet
 			log.Info("Server exists but not ready", "status", server.Status)
 			return nil, nil
 		}
+	} else {
+		log.Info("DEBUG: Skipping early return block - will proceed to create userdata and reinstall")
 	}
 
 	// Get bootstrap data using the new scope method
+	log.Info("DEBUG: About to call GetBootstrapData")
 	userData, err := machineScope.GetBootstrapData(ctx)
 	if err != nil {
 		if errors.Is(err, scope.ErrBootstrapDataNotReady) {
@@ -321,8 +331,10 @@ func (r *LatitudeMachineReconciler) reconcileServer(ctx context.Context, machine
 			log.Info("Bootstrap user data not ready yet")
 			return nil, nil
 		}
+		log.Error(err, "DEBUG: GetBootstrapData failed with error")
 		return nil, fmt.Errorf("failed to get bootstrap data: %w", err)
 	}
+	log.Info("DEBUG: GetBootstrapData succeeded", "userDataLength", len(userData))
 
 	var udID string
 	if latitudeMachine.Status.UserDataID != "" {
