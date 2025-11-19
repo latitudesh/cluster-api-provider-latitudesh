@@ -292,7 +292,8 @@ func (r *LatitudeMachineReconciler) reconcileServer(ctx context.Context, machine
 	}
 
 	// If server already exists, check its status
-	if latitudeMachine.Status.ServerID != "" {
+	// BUT: if we're in reinstall mode (existingServerID set), skip this check and proceed to reinstall
+	if latitudeMachine.Status.ServerID != "" && existingServerID == "" {
 		server, err := r.LatitudeClient.GetServer(ctx, latitudeMachine.Status.ServerID)
 		if err != nil {
 			// Server might have been deleted externally
