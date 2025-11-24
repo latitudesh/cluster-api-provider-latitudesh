@@ -1,0 +1,26 @@
+---
+# MetalLB Configuration for VLAN-based LoadBalancer
+# Apply this after the cluster is ready and all nodes have VLAN configured
+#
+# Usage:
+#   kubectl apply -f metallb-vlan-config.yaml
+
+apiVersion: metallb.io/v1beta1
+kind: IPAddressPool
+metadata:
+  name: vlan-pool
+  namespace: metallb-system
+spec:
+  addresses:
+  - 10.8.0.100-10.8.0.150  # Update with your VLAN subnet range
+---
+apiVersion: metallb.io/v1beta1
+kind: L2Advertisement
+metadata:
+  name: vlan-l2
+  namespace: metallb-system
+spec:
+  ipAddressPools:
+  - vlan-pool
+  interfaces:
+  - vlan.2011  # Update VID to match your VLAN

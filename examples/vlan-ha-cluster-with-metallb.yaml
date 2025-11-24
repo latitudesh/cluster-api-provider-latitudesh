@@ -1,0 +1,225 @@
+---
+# High Availability RKE2 Cluster with VLAN + MetalLB
+# This example demonstrates:
+# - 3-node HA control plane with automatic providerID configuration
+# - VLAN networking for private node communication
+# - MetalLB for LoadBalancer services without CCM
+#
+# Prerequisites:
+# 1. Create a VLAN in your Latitude project
+# 2. Update VLAN ID, VID, and subnet in this manifest
+# 3. Create SSH keys secret: kubectl create secret generic latitude-ssh-keys --from-literal=authorized_keys="ssh-rsa ..."
+# 4. Update API key, project ID, and control plane endpoint
+
+apiVersion: cluster.x-k8s.io/v1beta1
+kind: Cluster
+metadata:
+  name: vlan-ha-cluster
+  namespace: default
+spec:
+  clusterNetwork:
+    pods:
+      cidrBlocks: ["10.244.0.0/16"]
+    services:
+      cidrBlocks: ["10.96.0.0/12"]
+  controlPlaneEndpoint:
+    host: "your-cluster-endpoint.example.com"  # Update with your DNS or VIP
+    port: 6443
+  controlPlaneRef:
+    apiVersion: controlplane.cluster.x-k8s.io/v1beta1
+    kind: RKE2ControlPlane
+    name: vlan-ha-cluster-control-plane
+  infrastructureRef:
+    apiVersion: infrastructure.cluster.x-k8s.io/v1beta1
+    kind: LatitudeCluster
+    name: vlan-ha-cluster
+---
+apiVersion: infrastructure.cluster.x-k8s.io/v1beta1
+kind: LatitudeCluster
+metadata:
+  name: vlan-ha-cluster
+  namespace: default
+spec:
+  location: "SAO2"
+  projectRef:
+    projectID: "proj_xxxxx"  # Update with your project ID
+---
+apiVersion: infrastructure.cluster.x-k8s.io/v1beta1
+kind: LatitudeMachineTemplate
+metadata:
+  name: vlan-ha-cluster-control-plane
+  namespace: default
+spec:
+  template:
+    spec:
+      plan: "c2-small-x86"
+      operatingSystem: "ubuntu_24_04_x64_lts"
+      sshKeySecretRef:
+        name: latitude-ssh-keys
+        namespace: default
+---
+apiVersion: controlplane.cluster.x-k8s.io/v1beta1
+kind: RKE2ControlPlane
+metadata:
+  name: vlan-ha-cluster-control-plane
+  namespace: default
+spec:
+  replicas: 3
+  version: v1.30.0+rke2r1
+  infrastructureRef:
+    apiVersion: infrastructure.cluster.x-k8s.io/v1beta1
+    kind: LatitudeMachineTemplate
+    name: vlan-ha-cluster-control-plane
+  agentConfig:
+    nodeName: '{{ ds.meta_data.hostname }}'
+  serverConfig:
+    cni: calico
+    tlsSan:
+      - your-cluster-endpoint.example.com  # Update to match controlPlaneEndpoint
+      - 10.8.0.10  # Update with your VLAN subnet
+      - 127.0.0.1
+      - localhost
+  registrationMethod: internal-first
+  rolloutStrategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+  files:
+    # VLAN Netplan Configuration
+    # NOTE: Interface name may vary (eno2, enp1s0f1, etc.)
+    # Check with: ip link show
+    - path: /etc/netplan/99-vlan.yaml
+      owner: root:root
+      permissions: "0644"
+      content: |-
+        network:
+          version: 2
+          ethernets:
+            eno2:  # Update with your interface name
+              dhcp4: no
+          vlans:
+            vlan.2011:  # Update VID to match your VLAN
+              id: 2011  # Update VID
+              link: eno2  # Update with your interface name
+              addresses: [10.8.0.10/24]  # Update with your VLAN subnet
+
+    # Store Latitude server information for providerID lookup
+    - path: /etc/latitude-server-info
+      owner: root:root
+      permissions: "0644"
+      content: |-
+        LATITUDE_HOSTNAME={{ HOSTNAME }}
+        LATITUDE_PUBLIC_IPV4={{ PUBLIC_IPV4 }}
+        LATITUDE_PROJECT_ID=proj_xxxxx  # Update with your project ID
+
+    # Python script to query Latitude API and get server ID
+    - path: /usr/local/bin/get-latitude-server-id.py
+      owner: root:root
+      permissions: "0755"
+      content: |-
+        #!/usr/bin/env python3
+        import json
+        import urllib.request
+        import sys
+
+        api_key = "your_api_key_here"  # Update with your API key
+        project_id = sys.argv[3] if len(sys.argv) > 3 else "proj_xxxxx"  # Update default
+        target_ip = sys.argv[1] if len(sys.argv) > 1 else ""
+        target_hostname = sys.argv[2] if len(sys.argv) > 2 else ""
+
+        try:
+            # Use project filter to avoid pagination issues
+            url = f"https://api.latitude.sh/servers?filter[project]={project_id}"
+            req = urllib.request.Request(url)
+            req.add_header("Authorization", f"Bearer {api_key}")
+
+            with urllib.request.urlopen(req, timeout=30) as response:
+                data = json.loads(response.read().decode())
+
+            # Try to find by IP first
+            for server in data.get('data', []):
+                if server.get('attributes', {}).get('primary_ipv4') == target_ip:
+                    print(server['id'])
+                    sys.exit(0)
+
+            # If not found by IP, try by hostname
+            for server in data.get('data', []):
+                if server.get('attributes', {}).get('hostname') == target_hostname:
+                    print(server['id'])
+                    sys.exit(0)
+
+            sys.exit(1)
+        except Exception as e:
+            print(f"ERROR: {e}", file=sys.stderr)
+            sys.exit(1)
+
+  preRKE2Commands:
+    # Configure firewall
+    - ufw --force enable
+    - ufw default deny incoming
+    - ufw default allow outgoing
+    - ufw allow 22/tcp
+    - ufw allow 6443/tcp
+    - ufw allow 9345/tcp
+    - ufw allow 2379:2380/tcp
+    - ufw allow 10250/tcp
+    - ufw allow 10259/tcp
+    - ufw allow 10257/tcp
+    - ufw allow 4789/udp
+    - ufw allow 5473/tcp comment 'Calico Typha'
+    - ufw --force enable
+
+    # Configure kernel modules and networking
+    - modprobe overlay
+    - modprobe br_netfilter
+    - sysctl -w net.bridge.bridge-nf-call-iptables=1
+    - sysctl -w net.ipv4.ip_forward=1
+    - swapoff -a
+
+    # Apply VLAN configuration
+    - netplan apply
+    - sleep 10
+    - echo "=== VLAN Interface Status ==="
+    - ip addr show vlan.2011 || echo "VLAN interface not found"
+
+    # Configure Latitude providerID automatically
+    - echo "=== Configuring Latitude providerID with Python ==="
+    - |
+      LATITUDE_PUBLIC_IPV4=$(grep LATITUDE_PUBLIC_IPV4 /etc/latitude-server-info | cut -d'=' -f2 | cut -d'/' -f1)
+      LATITUDE_HOSTNAME=$(grep LATITUDE_HOSTNAME /etc/latitude-server-info | cut -d'=' -f2)
+      LATITUDE_PROJECT_ID=$(grep LATITUDE_PROJECT_ID /etc/latitude-server-info | cut -d'=' -f2)
+      echo "Hostname: $LATITUDE_HOSTNAME"
+      echo "Public IPv4: $LATITUDE_PUBLIC_IPV4"
+      echo "Project ID: $LATITUDE_PROJECT_ID"
+      echo "Querying Latitude API with project filter..."
+      SERVER_ID=$(/usr/local/bin/get-latitude-server-id.py "$LATITUDE_PUBLIC_IPV4" "$LATITUDE_HOSTNAME" "$LATITUDE_PROJECT_ID")
+      if [ -z "$SERVER_ID" ]; then
+        echo "ERROR: Could not find server ID"
+        echo "Will continue without providerID"
+      else
+        echo "Found server ID: $SERVER_ID"
+        mkdir -p /etc/rancher/rke2/config.yaml.d
+        cat > /etc/rancher/rke2/config.yaml.d/99-provider-id.yaml << EOF
+      kubelet-arg:
+        - "provider-id=latitude://$SERVER_ID"
+      EOF
+        echo "Kubelet configured with providerID: latitude://$SERVER_ID"
+        cat /etc/rancher/rke2/config.yaml.d/99-provider-id.yaml
+      fi
+
+  postRKE2Commands:
+    - export KUBECONFIG=/etc/rancher/rke2/rke2.yaml
+    - sleep 30
+    - echo "=== Installing MetalLB ==="
+    - kubectl apply -f https://raw.githubusercontent.com/metallb/metallb/v0.14.9/config/manifests/metallb-native.yaml
+    - echo "=== Waiting for MetalLB to be ready ==="
+    - kubectl wait --namespace metallb-system --for=condition=ready pod --selector=app=metallb --timeout=120s
+    - echo "=== Verifying providerID ==="
+    - kubectl get nodes -o wide
+    - kubectl get nodes -o jsonpath='{.items[*].spec.providerID}'
+    - echo ""
+    - echo "=== Control plane ready ==="
+    - echo "Next steps:"
+    - echo "1. Attach servers to VLAN using Latitude API"
+    - echo "2. Configure VLAN IPs on additional nodes"
+    - echo "3. Apply MetalLB configuration (IPAddressPool and L2Advertisement)"
