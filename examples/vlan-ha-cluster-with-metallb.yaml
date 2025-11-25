@@ -10,10 +10,17 @@
 # 1. Create SSH keys secret: kubectl create secret generic latitude-ssh-keys --from-literal=authorized_keys="ssh-rsa ..."
 # 2. Update project ID, location, and control plane endpoint
 # 3. Configure vlanConfig with your VLAN subnet (controller will manage VLAN)
+# 4. Update /etc/latitude-credentials with your API key
 #
 # The controller will:
 # - Create/manage VLAN based on vlanConfig
 # - Assign VLAN IPs to servers automatically
+#
+# Important Notes:
+# - cloudProviderName: external and disableCloudController: true are required
+#   to prevent RKE2's internal cloud controller from overriding the providerID
+# - Uses "." instead of "source" for POSIX shell compatibility (Ubuntu uses dash)
+# - API URL uses URL-encoded brackets: filter%5Bproject%5D instead of filter[project]
 
 apiVersion: cluster.x-k8s.io/v1beta1
 kind: Cluster
@@ -84,6 +91,9 @@ spec:
     nodeName: '{{ ds.meta_data.hostname }}'
   serverConfig:
     cni: calico
+    # Disable RKE2's internal cloud controller so kubelet's provider-id is used
+    cloudProviderName: external
+    disableCloudController: true
     tlsSan:
       - your-cluster-endpoint.example.com  # Update to match controlPlaneEndpoint
       - 127.0.0.1
@@ -156,10 +166,10 @@ spec:
         PUBLIC_IP=$(curl -s --connect-timeout 5 ifconfig.me || hostname -I | awk '{print $1}')
         HOSTNAME=$(hostname)
 
-        # Query Latitude API
+        # Query Latitude API (URL-encode brackets for filter parameter)
         RESPONSE=$(curl -s --connect-timeout 10 \
           -H "Authorization: Bearer $API_KEY" \
-          "https://api.latitude.sh/servers?filter[project]=$PROJECT_ID")
+          "https://api.latitude.sh/servers?filter%5Bproject%5D=$PROJECT_ID")
 
         # Try to find server by IP
         SERVER_ID=$(echo "$RESPONSE" | python3 -c "
@@ -239,7 +249,7 @@ spec:
     # Configure Latitude providerID
     - echo "=== Configuring Latitude providerID ==="
     - |
-      source /etc/latitude-credentials
+      . /etc/latitude-credentials
       export LATITUDE_API_KEY LATITUDE_PROJECT_ID
       SERVER_ID=$(/usr/local/bin/get-latitude-server-id.sh 2>/dev/null || echo "")
       if [ -z "$SERVER_ID" ]; then
