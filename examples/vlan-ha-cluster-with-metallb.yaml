@@ -17,8 +17,8 @@
 # - Assign VLAN IPs to servers automatically
 #
 # Important Notes:
-# - cloudProviderName: external and disableCloudController: true are required
-#   to prevent RKE2's internal cloud controller from overriding the providerID
+# - cloudProviderName: external is required to use external cloud provider
+#   so kubelet's provider-id configuration is respected
 # - Uses "." instead of "source" for POSIX shell compatibility (Ubuntu uses dash)
 # - API URL uses URL-encoded brackets: filter%5Bproject%5D instead of filter[project]
 
@@ -91,9 +91,8 @@ spec:
     nodeName: '{{ ds.meta_data.hostname }}'
   serverConfig:
     cni: calico
-    # Disable RKE2's internal cloud controller so kubelet's provider-id is used
+    # Use external cloud provider so kubelet's provider-id is respected
     cloudProviderName: external
-    disableCloudController: true
     tlsSan:
       - your-cluster-endpoint.example.com  # Update to match controlPlaneEndpoint
       - 127.0.0.1
