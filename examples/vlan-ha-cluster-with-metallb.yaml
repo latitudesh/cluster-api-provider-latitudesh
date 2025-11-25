@@ -128,9 +128,10 @@ spec:
 
           # Configure RKE2 to use VLAN IP for node-ip
           mkdir -p /etc/rancher/rke2/config.yaml.d
-          cat > /etc/rancher/rke2/config.yaml.d/50-node-ip.yaml << EOF
+          cat > /etc/rancher/rke2/config.yaml.d/50-node-ip.yaml <<'NODEIP'
         node-ip: $VLAN_IP
-        EOF
+        NODEIP
+          sed -i "s/\$VLAN_IP/$VLAN_IP/" /etc/rancher/rke2/config.yaml.d/50-node-ip.yaml
           echo "Configured RKE2 node-ip: $VLAN_IP"
         else
           echo "WARNING: VLAN interface found but no IP assigned yet"
@@ -246,10 +247,8 @@ spec:
       else
         echo "Found server ID: $SERVER_ID"
         mkdir -p /etc/rancher/rke2/config.yaml.d
-        cat > /etc/rancher/rke2/config.yaml.d/99-provider-id.yaml << EOF
-      kubelet-arg:
-        - "provider-id=latitude://$SERVER_ID"
-      EOF
+        echo "kubelet-arg:" > /etc/rancher/rke2/config.yaml.d/99-provider-id.yaml
+        echo "  - \"provider-id=latitude://$SERVER_ID\"" >> /etc/rancher/rke2/config.yaml.d/99-provider-id.yaml
         echo "Configured providerID: latitude://$SERVER_ID"
       fi
 
@@ -263,7 +262,7 @@ spec:
     - echo "=== Node Status ==="
     - kubectl get nodes -o wide
     - echo "=== ProviderID Status ==="
-    - kubectl get nodes -o jsonpath='{range .items[*]}{.metadata.name}{": "}{.spec.providerID}{"\n"}{end}'
+    - 'kubectl get nodes -o jsonpath=''{range .items[*]}{.metadata.name}{": "}{.spec.providerID}{"\n"}{end}'''
     - echo ""
     - echo "=== Control plane ready ==="
     - echo "MetalLB installed. Apply IPAddressPool and L2Advertisement to complete setup."
