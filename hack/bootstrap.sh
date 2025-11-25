@@ -191,9 +191,7 @@ kustomize build config/crd | kubectl apply -f -
 kustomize build config/default > "/tmp/components.yaml"
 
 # hard-fix
-sed -i -E 's#(image:[[:space:]]*)(manager:[^[:space:]]*)#\1'"$STABLE_IMG"'#g' /tmp/components.yaml
-sed -i -E 's#(image:[[:space:]]*)(controller:[^[:space:]]*)#\1'"$STABLE_IMG"'#g' /tmp/components.yaml
-sed -i -E 's#(image:[[:space:]]*)(capl-manager:[^[:space:]]*)#\1'"$STABLE_IMG"'#g' /tmp/components.yaml
+sed -i -E 's#image:[[:space:]]*[^[:space:]]*(manager|controller|capl-manager|cluster-api-provider-latitudesh):[^[:space:]]*#image: '"$STABLE_IMG"'#g' /tmp/components.yaml
 
 cat > "/tmp/metadata.yaml" <<'YAML'
 apiVersion: clusterctl.cluster.x-k8s.io/v1alpha3
