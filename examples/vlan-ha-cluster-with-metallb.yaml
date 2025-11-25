@@ -258,12 +258,10 @@ spec:
     - echo "=== Installing MetalLB ==="
     - kubectl apply -f https://raw.githubusercontent.com/metallb/metallb/v0.14.9/config/manifests/metallb-native.yaml
     - echo "=== Waiting for MetalLB to be ready ==="
-    - kubectl wait --namespace metallb-system --for=condition=ready pod --selector=app=metallb --timeout=120s || echo "MetalLB not ready yet, continuing..."
+    - kubectl wait --namespace metallb-system --for=condition=ready pod --selector=app=metallb --timeout=120s || echo "MetalLB not ready yet"
     - echo "=== Node Status ==="
     - kubectl get nodes -o wide
     - echo "=== ProviderID Status ==="
-    - 'kubectl get nodes -o jsonpath=''{range .items[*]}{.metadata.name}{": "}{.spec.providerID}{"\n"}{end}'''
-    - echo ""
+    - kubectl get nodes -o custom-columns=NAME:.metadata.name,PROVIDERID:.spec.providerID
     - echo "=== Control plane ready ==="
-    - echo "MetalLB installed. Apply IPAddressPool and L2Advertisement to complete setup."
-    - echo "See: examples/metallb-vlan-config.yaml"
+    - echo "MetalLB installed - apply IPAddressPool and L2Advertisement to complete"
