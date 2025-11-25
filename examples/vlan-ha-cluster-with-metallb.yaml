@@ -2,14 +2,18 @@
 # High Availability RKE2 Cluster with VLAN + MetalLB
 # This example demonstrates:
 # - 3-node HA control plane with automatic providerID configuration
-# - VLAN networking for private node communication
+# - VLAN networking for private node communication (using vlanConfig)
 # - MetalLB for LoadBalancer services without CCM
+# - Dynamic node-ip configuration from VLAN interface
 #
 # Prerequisites:
-# 1. Create a VLAN in your Latitude project
-# 2. Update VLAN ID, VID, and subnet in this manifest
-# 3. Create SSH keys secret: kubectl create secret generic latitude-ssh-keys --from-literal=authorized_keys="ssh-rsa ..."
-# 4. Update API key, project ID, and control plane endpoint
+# 1. Create SSH keys secret: kubectl create secret generic latitude-ssh-keys --from-literal=authorized_keys="ssh-rsa ..."
+# 2. Update project ID, location, and control plane endpoint
+# 3. Configure vlanConfig with your VLAN subnet (controller will manage VLAN)
+#
+# The controller will:
+# - Create/manage VLAN based on vlanConfig
+# - Assign VLAN IPs to servers automatically
 
 apiVersion: cluster.x-k8s.io/v1beta1
 kind: Cluster
@@ -43,6 +47,12 @@ spec:
   location: "SAO2"
   projectRef:
     projectID: "proj_xxxxx"  # Update with your project ID
+  # VLAN configuration - controller will create and manage VLAN
+  vlanConfig:
+    subnet: "10.20.0.0/24"  # VLAN subnet for private node communication
+    # vid: 2011             # Optional: specific VLAN ID (auto-assigned if not specified)
+    # existingVLANID: "vlan_xxx"  # Optional: use existing VLAN instead of creating
+    # networkInterface: "eno2"    # Optional: network interface (auto-detected if not specified)
 ---
 apiVersion: infrastructure.cluster.x-k8s.io/v1beta1
 kind: LatitudeMachineTemplate
@@ -76,7 +86,6 @@ spec:
     cni: calico
     tlsSan:
       - your-cluster-endpoint.example.com  # Update to match controlPlaneEndpoint
-      - 10.8.0.10  # Update with your VLAN subnet
       - 127.0.0.1
       - localhost
   registrationMethod: internal-first
@@ -85,73 +94,104 @@ spec:
     rollingUpdate:
       maxSurge: 1
   files:
-    # VLAN Netplan Configuration
-    # NOTE: Interface name may vary (eno2, enp1s0f1, etc.)
-    # Check with: ip link show
-    - path: /etc/netplan/99-vlan.yaml
-      owner: root:root
-      permissions: "0644"
-      content: |-
-        network:
-          version: 2
-          ethernets:
-            eno2:  # Update with your interface name
-              dhcp4: no
-          vlans:
-            vlan.2011:  # Update VID to match your VLAN
-              id: 2011  # Update VID
-              link: eno2  # Update with your interface name
-              addresses: [10.8.0.10/24]  # Update with your VLAN subnet
-
-    # Store Latitude server information for providerID lookup
-    - path: /etc/latitude-server-info
-      owner: root:root
-      permissions: "0644"
-      content: |-
-        LATITUDE_HOSTNAME={{ HOSTNAME }}
-        LATITUDE_PUBLIC_IPV4={{ PUBLIC_IPV4 }}
-        LATITUDE_PROJECT_ID=proj_xxxxx  # Update with your project ID
-
-    # Python script to query Latitude API and get server ID
-    - path: /usr/local/bin/get-latitude-server-id.py
+    # Script to detect VLAN interface and configure networking
+    # The VLAN IP is assigned by the Latitude controller via the API
+    - path: /usr/local/bin/configure-vlan-ip.sh
       owner: root:root
       permissions: "0755"
       content: |-
-        #!/usr/bin/env python3
-        import json
-        import urllib.request
-        import sys
+        #!/bin/bash
+        set -e
 
-        api_key = "your_api_key_here"  # Update with your API key
-        project_id = sys.argv[3] if len(sys.argv) > 3 else "proj_xxxxx"  # Update default
-        target_ip = sys.argv[1] if len(sys.argv) > 1 else ""
-        target_hostname = sys.argv[2] if len(sys.argv) > 2 else ""
+        # Find VLAN interface (format: vlan.XXXX or vlanXXXX)
+        VLAN_IFACE=$(ip link show | grep -oP 'vlan\.\d+|vlan\d+' | head -1)
 
-        try:
-            # Use project filter to avoid pagination issues
-            url = f"https://api.latitude.sh/servers?filter[project]={project_id}"
-            req = urllib.request.Request(url)
-            req.add_header("Authorization", f"Bearer {api_key}")
+        if [ -z "$VLAN_IFACE" ]; then
+          echo "No VLAN interface found, checking for tagged interfaces..."
+          # Try to find interface with VLAN tag
+          VLAN_IFACE=$(ip -d link show | grep -B1 'vlan protocol' | grep -oP '^\d+: \K[^@:]+' | head -1)
+        fi
 
-            with urllib.request.urlopen(req, timeout=30) as response:
-                data = json.loads(response.read().decode())
+        if [ -z "$VLAN_IFACE" ]; then
+          echo "WARNING: No VLAN interface detected"
+          exit 0
+        fi
 
-            # Try to find by IP first
-            for server in data.get('data', []):
-                if server.get('attributes', {}).get('primary_ipv4') == target_ip:
-                    print(server['id'])
-                    sys.exit(0)
+        echo "Found VLAN interface: $VLAN_IFACE"
 
-            # If not found by IP, try by hostname
-            for server in data.get('data', []):
-                if server.get('attributes', {}).get('hostname') == target_hostname:
-                    print(server['id'])
-                    sys.exit(0)
+        # Get the IP from the VLAN interface
+        VLAN_IP=$(ip -4 addr show "$VLAN_IFACE" 2>/dev/null | grep -oP '(?<=inet\s)\d+(\.\d+){3}' | head -1)
 
-            sys.exit(1)
-        except Exception as e:
-            print(f"ERROR: {e}", file=sys.stderr)
-            sys.exit(1)
+        if [ -n "$VLAN_IP" ]; then
+          echo "VLAN IP: $VLAN_IP"
+          echo "$VLAN_IP" > /etc/latitude-vlan-ip
+
+          # Configure RKE2 to use VLAN IP for node-ip
+          mkdir -p /etc/rancher/rke2/config.yaml.d
+          cat > /etc/rancher/rke2/config.yaml.d/50-node-ip.yaml << EOF
+        node-ip: $VLAN_IP
+        EOF
+          echo "Configured RKE2 node-ip: $VLAN_IP"
+        else
+          echo "WARNING: VLAN interface found but no IP assigned yet"
+        fi
+
+    # Script to query Latitude API and get server ID for providerID
+    - path: /usr/local/bin/get-latitude-server-id.sh
+      owner: root:root
+      permissions: "0755"
+      content: |-
+        #!/bin/bash
+        # Get server ID from Latitude API using hostname or public IP
+
+        API_KEY="${LATITUDE_API_KEY:-}"
+        PROJECT_ID="${LATITUDE_PROJECT_ID:-}"
+
+        if [ -z "$API_KEY" ] || [ -z "$PROJECT_ID" ]; then
+          echo "ERROR: LATITUDE_API_KEY and LATITUDE_PROJECT_ID must be set" >&2
+          exit 1
+        fi
+
+        PUBLIC_IP=$(curl -s --connect-timeout 5 ifconfig.me || hostname -I | awk '{print $1}')
+        HOSTNAME=$(hostname)
+
+        # Query Latitude API
+        RESPONSE=$(curl -s --connect-timeout 10 \
+          -H "Authorization: Bearer $API_KEY" \
+          "https://api.latitude.sh/servers?filter[project]=$PROJECT_ID")
+
+        # Try to find server by IP
+        SERVER_ID=$(echo "$RESPONSE" | python3 -c "
+        import sys, json
+        data = json.load(sys.stdin)
+        target_ip = '$PUBLIC_IP'
+        target_hostname = '$HOSTNAME'
+        for server in data.get('data', []):
+            attrs = server.get('attributes', {})
+            if attrs.get('primary_ipv4') == target_ip:
+                print(server['id'])
+                sys.exit(0)
+        for server in data.get('data', []):
+            attrs = server.get('attributes', {})
+            if attrs.get('hostname') == target_hostname:
+                print(server['id'])
+                sys.exit(0)
+        sys.exit(1)
+        " 2>/dev/null)
+
+        if [ -n "$SERVER_ID" ]; then
+          echo "$SERVER_ID"
+        else
+          exit 1
+        fi
+
+    # Store Latitude credentials for providerID lookup
+    - path: /etc/latitude-credentials
+      owner: root:root
+      permissions: "0600"
+      content: |-
+        LATITUDE_API_KEY=your_api_key_here
+        LATITUDE_PROJECT_ID=proj_xxxxx
 
   preRKE2Commands:
     # Configure firewall
@@ -176,26 +216,33 @@ spec:
     - sysctl -w net.ipv4.ip_forward=1
     - swapoff -a
 
-    # Apply VLAN configuration
-    - netplan apply
-    - sleep 10
-    - echo "=== VLAN Interface Status ==="
-    - ip addr show vlan.2011 || echo "VLAN interface not found"
-
-    # Configure Latitude providerID automatically
-    - echo "=== Configuring Latitude providerID with Python ==="
+    # Wait for VLAN to be configured by Latitude (IP assigned via API)
+    - echo "=== Waiting for VLAN configuration ==="
     - |
-      LATITUDE_PUBLIC_IPV4=$(grep LATITUDE_PUBLIC_IPV4 /etc/latitude-server-info | cut -d'=' -f2 | cut -d'/' -f1)
-      LATITUDE_HOSTNAME=$(grep LATITUDE_HOSTNAME /etc/latitude-server-info | cut -d'=' -f2)
-      LATITUDE_PROJECT_ID=$(grep LATITUDE_PROJECT_ID /etc/latitude-server-info | cut -d'=' -f2)
-      echo "Hostname: $LATITUDE_HOSTNAME"
-      echo "Public IPv4: $LATITUDE_PUBLIC_IPV4"
-      echo "Project ID: $LATITUDE_PROJECT_ID"
-      echo "Querying Latitude API with project filter..."
-      SERVER_ID=$(/usr/local/bin/get-latitude-server-id.py "$LATITUDE_PUBLIC_IPV4" "$LATITUDE_HOSTNAME" "$LATITUDE_PROJECT_ID")
+      for i in $(seq 1 30); do
+        VLAN_IFACE=$(ip link show 2>/dev/null | grep -oP 'vlan\.\d+|vlan\d+' | head -1)
+        if [ -n "$VLAN_IFACE" ]; then
+          VLAN_IP=$(ip -4 addr show "$VLAN_IFACE" 2>/dev/null | grep -oP '(?<=inet\s)\d+(\.\d+){3}' | head -1)
+          if [ -n "$VLAN_IP" ]; then
+            echo "VLAN interface $VLAN_IFACE ready with IP: $VLAN_IP"
+            break
+          fi
+        fi
+        echo "Waiting for VLAN IP assignment... ($i/30)"
+        sleep 10
+      done
+
+    # Configure VLAN IP for RKE2
+    - /usr/local/bin/configure-vlan-ip.sh
+
+    # Configure Latitude providerID
+    - echo "=== Configuring Latitude providerID ==="
+    - |
+      source /etc/latitude-credentials
+      export LATITUDE_API_KEY LATITUDE_PROJECT_ID
+      SERVER_ID=$(/usr/local/bin/get-latitude-server-id.sh 2>/dev/null || echo "")
       if [ -z "$SERVER_ID" ]; then
-        echo "ERROR: Could not find server ID"
-        echo "Will continue without providerID"
+        echo "WARNING: Could not determine server ID, providerID will not be set"
       else
         echo "Found server ID: $SERVER_ID"
         mkdir -p /etc/rancher/rke2/config.yaml.d
@@ -203,8 +250,7 @@ spec:
       kubelet-arg:
         - "provider-id=latitude://$SERVER_ID"
       EOF
-        echo "Kubelet configured with providerID: latitude://$SERVER_ID"
-        cat /etc/rancher/rke2/config.yaml.d/99-provider-id.yaml
+        echo "Configured providerID: latitude://$SERVER_ID"
       fi
 
   postRKE2Commands:
@@ -213,13 +259,12 @@ spec:
     - echo "=== Installing MetalLB ==="
     - kubectl apply -f https://raw.githubusercontent.com/metallb/metallb/v0.14.9/config/manifests/metallb-native.yaml
     - echo "=== Waiting for MetalLB to be ready ==="
-    - kubectl wait --namespace metallb-system --for=condition=ready pod --selector=app=metallb --timeout=120s
-    - echo "=== Verifying providerID ==="
+    - kubectl wait --namespace metallb-system --for=condition=ready pod --selector=app=metallb --timeout=120s || echo "MetalLB not ready yet, continuing..."
+    - echo "=== Node Status ==="
     - kubectl get nodes -o wide
-    - kubectl get nodes -o jsonpath='{.items[*].spec.providerID}'
+    - echo "=== ProviderID Status ==="
+    - kubectl get nodes -o jsonpath='{range .items[*]}{.metadata.name}{": "}{.spec.providerID}{"\n"}{end}'
     - echo ""
     - echo "=== Control plane ready ==="
-    - echo "Next steps:"
-    - echo "1. Attach servers to VLAN using Latitude API"
-    - echo "2. Configure VLAN IPs on additional nodes"
-    - echo "3. Apply MetalLB configuration (IPAddressPool and L2Advertisement)"
+    - echo "MetalLB installed. Apply IPAddressPool and L2Advertisement to complete setup."
+    - echo "See: examples/metallb-vlan-config.yaml"
