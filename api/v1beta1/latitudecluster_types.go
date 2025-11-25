@@ -15,6 +15,27 @@ type ProjectRef struct {
 	ProjectID string `json:"projectID,omitempty"`
 }
 
+// VLANConfig defines configuration for VLAN networking
+type VLANConfig struct {
+	// Subnet for the VLAN (e.g., "10.8.0.0/24")
+	// +kubebuilder:validation:Required
+	Subnet string `json:"subnet"`
+
+	// VID (VLAN ID number). If not specified, Latitude will assign one
+	// +optional
+	VID *int `json:"vid,omitempty"`
+
+	// ExistingVLANID to use instead of creating a new one
+	// If specified, the controller will not create or delete the VLAN
+	// +optional
+	ExistingVLANID *string `json:"existingVLANID,omitempty"`
+
+	// NetworkInterface to use for VLAN (e.g., "eno2", "enp1s0f1")
+	// If not specified, will attempt to auto-detect
+	// +optional
+	NetworkInterface string `json:"networkInterface,omitempty"`
+}
+
 type LatitudeClusterSpec struct {
 	// Location is the Latitude.sh region/site where resources will be created
 	Location string `json:"location,omitempty"`
@@ -24,6 +45,11 @@ type LatitudeClusterSpec struct {
 
 	// ControlPlaneEndpoint represents the endpoint used to communicate with the control plane
 	ControlPlaneEndpoint APIEndpoint `json:"controlPlaneEndpoint,omitempty"`
+
+	// VLANConfig defines optional VLAN networking configuration
+	// When specified, the controller will create/manage a VLAN for the cluster
+	// +optional
+	VLANConfig *VLANConfig `json:"vlanConfig,omitempty"`
 }
 
 type LatitudeClusterStatus struct {
@@ -33,6 +59,10 @@ type LatitudeClusterStatus struct {
 	// ControlPlaneEndpoint represents the endpoint used to communicate with the control plane
 	// +optional
 	ControlPlaneEndpoint APIEndpoint `json:"controlPlaneEndpoint,omitempty"`
+
+	// VLANID is the ID of the VLAN created or used by this cluster
+	// +optional
+	VLANID *string `json:"vlanID,omitempty"`
 
 	// Conditions defines current service state of the LatitudeCluster
 	// +optional

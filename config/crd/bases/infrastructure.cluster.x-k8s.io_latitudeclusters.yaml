@@ -64,6 +64,31 @@ spec:
                     description: ProjectID is the Latitude.sh project ID
                     type: string
                 type: object
+              vlanConfig:
+                description: |-
+                  VLANConfig defines optional VLAN networking configuration
+                  When specified, the controller will create/manage a VLAN for the cluster
+                properties:
+                  existingVLANID:
+                    description: |-
+                      ExistingVLANID to use instead of creating a new one
+                      If specified, the controller will not create or delete the VLAN
+                    type: string
+                  networkInterface:
+                    description: |-
+                      NetworkInterface to use for VLAN (e.g., "eno2", "enp1s0f1")
+                      If not specified, will attempt to auto-detect
+                    type: string
+                  subnet:
+                    description: Subnet for the VLAN (e.g., "10.8.0.0/24")
+                    type: string
+                  vid:
+                    description: VID (VLAN ID number). If not specified, Latitude
+                      will assign one
+                    type: integer
+                required:
+                - subnet
+                type: object
             type: object
           status:
             properties:
@@ -137,6 +162,10 @@ spec:
               ready:
                 description: Ready indicates that the cluster infrastructure is ready
                 type: boolean
+              vlanID:
+                description: VLANID is the ID of the VLAN created or used by this
+                  cluster
+                type: string
             type: object
         type: object
     served: true

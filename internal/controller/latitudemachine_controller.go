@@ -348,6 +348,13 @@ func (r *LatitudeMachineReconciler) reconcileServer(ctx context.Context, machine
 		log.Error(err, "failed to persist status after CreateServer")
 	}
 
+	// Attach server to VLAN if configured
+	if err := r.attachServerToVLAN(ctx, machineScope); err != nil {
+		log.Error(err, "Failed to attach server to VLAN")
+		// Don't fail the reconciliation if VLAN attachment fails
+		// The server is still created and can be manually attached later
+	}
+
 	return nil, nil
 }
 
@@ -643,4 +650,48 @@ func isPermanentError(err error) bool {
 	}
 
 	return false
+}
+
+// attachServerToVLAN attaches the server to the cluster's VLAN if configured
+func (r *LatitudeMachineReconciler) attachServerToVLAN(ctx context.Context, machineScope *scope.MachineScope) error {
+	log := crlog.FromContext(ctx)
+	latitudeMachine := machineScope.LatitudeMachine
+
+	// Get server ID
+	if latitudeMachine.Status.ServerID == "" {
+		return fmt.Errorf("serverID not set")
+	}
+
+	// Get LatitudeCluster to check for VLAN config
+	latitudeCluster, err := r.getLatitudeCluster(ctx, latitudeMachine)
+	if err != nil {
+		return fmt.Errorf("failed to get LatitudeCluster: %w", err)
+	}
+
+	// Skip if no VLAN configured
+	if latitudeCluster.Spec.VLANConfig == nil {
+		log.V(1).Info("No VLAN configuration specified, skipping VLAN attachment")
+		return nil
+	}
+
+	// Skip if VLAN not created yet
+	if latitudeCluster.Status.VLANID == nil {
+		log.Info("VLAN not created yet, skipping attachment")
+		return nil
+	}
+
+	serverID := latitudeMachine.Status.ServerID
+	vlanID := *latitudeCluster.Status.VLANID
+
+	log.Info("Attaching server to VLAN", "serverID", serverID, "vlanID", vlanID)
+
+	err = r.LatitudeClient.AttachServerToVLAN(ctx, serverID, vlanID)
+	if err != nil {
+		return fmt.Errorf("failed to attach server to VLAN: %w", err)
+	}
+
+	log.Info("Server attached to VLAN successfully", "serverID", serverID, "vlanID", vlanID)
+	r.recorder.Eventf(latitudeMachine, "Normal", "ServerAttachedToVLAN", "Attached server %s to VLAN %s", serverID, vlanID)
+
+	return nil
 }

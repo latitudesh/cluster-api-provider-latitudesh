@@ -237,8 +237,12 @@ func (r *LatitudeClusterReconciler) reconcileInfrastructure(ctx context.Context,
 
 	log.Info("Cluster infrastructure setup completed", "location", latitudeCluster.Spec.Location)
 
+	// Setup VLAN if configured
+	if err := r.reconcileVLAN(ctx, latitudeCluster); err != nil {
+		return fmt.Errorf("failed to reconcile VLAN: %w", err)
+	}
+
 	// TODO: Implement additional infrastructure setup if needed:
-	// - Create private networks
 	// - Setup firewalls
 	// - Configure load balancers (if supported)
 	// - Prepare SSH keys
@@ -246,16 +250,109 @@ func (r *LatitudeClusterReconciler) reconcileInfrastructure(ctx context.Context,
 	return nil
 }
 
+// reconcileVLAN manages VLAN lifecycle for the cluster
+func (r *LatitudeClusterReconciler) reconcileVLAN(ctx context.Context, latitudeCluster *infrav1.LatitudeCluster) error {
+	log := crlog.FromContext(ctx)
+
+	// Skip if no VLAN configuration
+	if latitudeCluster.Spec.VLANConfig == nil {
+		log.Info("No VLAN configuration specified, skipping VLAN setup")
+		return nil
+	}
+
+	vlanConfig := latitudeCluster.Spec.VLANConfig
+
+	// Use existing VLAN if specified
+	if vlanConfig.ExistingVLANID != nil {
+		log.Info("Using existing VLAN", "vlanID", *vlanConfig.ExistingVLANID)
+		latitudeCluster.Status.VLANID = vlanConfig.ExistingVLANID
+		return nil
+	}
+
+	// Check if VLAN already created
+	if latitudeCluster.Status.VLANID != nil {
+		// Verify it still exists
+		_, err := r.LatitudeClient.GetVLAN(ctx, *latitudeCluster.Status.VLANID)
+		if err == nil {
+			log.Info("VLAN already exists", "vlanID", *latitudeCluster.Status.VLANID)
+			return nil
+		}
+		log.Info("VLAN no longer exists, creating new one")
+	}
+
+	// Create new VLAN with cluster name in description for uniqueness
+	vlanDescription := fmt.Sprintf("capl-%s-%s", latitudeCluster.Name, vlanConfig.Subnet)
+	log.Info("Creating VLAN", "subnet", vlanConfig.Subnet, "description", vlanDescription)
+
+	if latitudeCluster.Spec.ProjectRef == nil {
+		return fmt.Errorf("projectRef is required for VLAN creation")
+	}
+
+	projectID := latitudeCluster.Spec.ProjectRef.ProjectID
+	vlan, err := r.LatitudeClient.CreateVLAN(ctx, latitude.CreateVLANRequest{
+		ProjectID: projectID,
+		Site:      latitudeCluster.Spec.Location,
+		Subnet:    vlanDescription,
+		VID:       vlanConfig.VID,
+	})
+	if err != nil {
+		return fmt.Errorf("failed to create VLAN: %w", err)
+	}
+
+	log.Info("VLAN created successfully", "vlanID", vlan.ID, "vid", vlan.VID, "subnet", vlan.Subnet)
+	latitudeCluster.Status.VLANID = &vlan.ID
+
+	// Record event
+	r.recorder.Eventf(latitudeCluster, "Normal", "VLANCreated", "Created VLAN %s with VID %d", vlan.ID, vlan.VID)
+
+	return nil
+}
+
 func (r *LatitudeClusterReconciler) cleanupInfrastructure(ctx context.Context, latitudeCluster *infrav1.LatitudeCluster) error {
 	log := crlog.FromContext(ctx)
 
+	// Cleanup VLAN if created
+	if err := r.cleanupVLAN(ctx, latitudeCluster); err != nil {
+		log.Error(err, "Failed to cleanup VLAN")
+		// Don't fail the cleanup if VLAN deletion fails
+	}
+
 	// TODO: Implement infrastructure cleanup:
-	// - Remove private networks
 	// - Cleanup firewalls
 	// - Remove load balancers (if created)
 	// - Cleanup SSH keys if created
 
 	log.Info("Cluster infrastructure cleanup completed")
+	return nil
+}
+
+// cleanupVLAN deletes the VLAN if it was created by this cluster
+func (r *LatitudeClusterReconciler) cleanupVLAN(ctx context.Context, latitudeCluster *infrav1.LatitudeCluster) error {
+	log := crlog.FromContext(ctx)
+
+	// Skip if no VLAN was created
+	if latitudeCluster.Status.VLANID == nil {
+		return nil
+	}
+
+	// Skip if using existing VLAN (don't delete it)
+	if latitudeCluster.Spec.VLANConfig != nil && latitudeCluster.Spec.VLANConfig.ExistingVLANID != nil {
+		log.Info("Using existing VLAN, skipping deletion", "vlanID", *latitudeCluster.Status.VLANID)
+		return nil
+	}
+
+	vlanID := *latitudeCluster.Status.VLANID
+	log.Info("Deleting VLAN", "vlanID", vlanID)
+
+	err := r.LatitudeClient.DeleteVLAN(ctx, vlanID)
+	if err != nil {
+		log.Error(err, "Failed to delete VLAN (may already be deleted)", "vlanID", vlanID)
+		return err
+	}
+
+	log.Info("VLAN deleted successfully", "vlanID", vlanID)
+	r.recorder.Eventf(latitudeCluster, "Normal", "VLANDeleted", "Deleted VLAN %s", vlanID)
+
 	return nil
 }
 

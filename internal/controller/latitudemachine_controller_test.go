@@ -537,3 +537,37 @@ func (m *mockLatitudeClient) DeleteUserData(ctx context.Context, userDataID stri
 func (m *mockLatitudeClient) WaitForServer(ctx context.Context, serverID string, targetStatus string, timeout time.Duration) (*latitude.Server, error) {
 	return m.GetServer(ctx, serverID)
 }
+
+func (m *mockLatitudeClient) CreateVLAN(ctx context.Context, req latitude.CreateVLANRequest) (*latitude.VLAN, error) {
+	return &latitude.VLAN{
+		ID:      "mock-vlan-id",
+		VID:     100,
+		Subnet:  req.Subnet,
+		Project: req.ProjectID,
+	}, nil
+}
+
+func (m *mockLatitudeClient) GetVLAN(ctx context.Context, vlanID string) (*latitude.VLAN, error) {
+	return &latitude.VLAN{
+		ID:      vlanID,
+		VID:     100,
+		Subnet:  "10.8.0.0/24",
+		Project: "mock-project-id",
+	}, nil
+}
+
+func (m *mockLatitudeClient) ListVLANs(ctx context.Context, projectID string) ([]*latitude.VLAN, error) {
+	return []*latitude.VLAN{}, nil
+}
+
+func (m *mockLatitudeClient) DeleteVLAN(ctx context.Context, vlanID string) error {
+	return nil
+}
+
+func (m *mockLatitudeClient) AttachServerToVLAN(ctx context.Context, serverID, vlanID string) error {
+	return nil
+}
+
+func (m *mockLatitudeClient) DetachServerFromVLAN(ctx context.Context, serverID, vlanID string) error {
+	return nil
+}
