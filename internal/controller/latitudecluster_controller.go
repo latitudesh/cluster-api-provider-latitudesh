@@ -308,6 +308,7 @@ func (r *LatitudeClusterReconciler) reconcileVLAN(ctx context.Context, latitudeC
 	return nil
 }
 
+//nolint:unparam // error return kept for future cleanup tasks (firewalls, load balancers, SSH keys)
 func (r *LatitudeClusterReconciler) cleanupInfrastructure(ctx context.Context, latitudeCluster *infrav1.LatitudeCluster) error {
 	log := crlog.FromContext(ctx)
 
