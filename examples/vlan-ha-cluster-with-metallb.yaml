@@ -19,6 +19,8 @@
 # Important Notes:
 # - cloudProviderName: external is required to use external cloud provider
 #   so kubelet's provider-id configuration is respected
+# - Without a CCM, nodes get taint "node.cloudprovider.kubernetes.io/uninitialized"
+#   which is automatically removed in postRKE2Commands
 # - Uses "." instead of "source" for POSIX shell compatibility (Ubuntu uses dash)
 # - API URL uses URL-encoded brackets: filter%5Bproject%5D instead of filter[project]
 
@@ -264,6 +266,9 @@ spec:
   postRKE2Commands:
     - export KUBECONFIG=/etc/rancher/rke2/rke2.yaml
     - sleep 30
+    # Remove cloud provider uninitialized taint (required when using external cloud provider without CCM)
+    - echo "=== Removing cloud provider taint ==="
+    - /var/lib/rancher/rke2/bin/kubectl --kubeconfig /etc/rancher/rke2/rke2.yaml taint nodes --all node.cloudprovider.kubernetes.io/uninitialized- || true
     - echo "=== Installing MetalLB ==="
     - kubectl apply -f https://raw.githubusercontent.com/metallb/metallb/v0.14.9/config/manifests/metallb-native.yaml
     - echo "=== Waiting for MetalLB to be ready ==="
