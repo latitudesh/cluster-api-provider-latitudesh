@@ -744,11 +744,17 @@ func (r *LatitudeMachineReconciler) injectVLANConfig(ctx context.Context, latitu
 		"machineIndex", machineIndex)
 
 	// Create VLAN config
+	// Use NetworkInterface from config, or default to eno2 (common on Latitude servers)
+	networkInterface := latitudeCluster.Spec.VLANConfig.NetworkInterface
+	if networkInterface == "" {
+		networkInterface = "eno2"
+	}
+
 	cfg := VLANNetplanConfig{
 		VID:       vid,
 		Subnet:    subnet,
 		IPAddress: ipAddress,
-		Interface: "enp1s0f1", // Default secondary interface on Latitude servers
+		Interface: networkInterface,
 	}
 
 	// Inject into userdata

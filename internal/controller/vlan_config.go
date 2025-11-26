@@ -27,13 +27,13 @@ type VLANNetplanConfig struct {
 	VID       int    // VLAN ID number (e.g., 2011)
 	Subnet    string // Subnet CIDR (e.g., "10.10.0.0/24")
 	IPAddress string // IP address for this machine (e.g., "10.10.0.10")
-	Interface string // Parent interface (defaults to enp1s0f1)
+	Interface string // Parent interface (defaults to eno2)
 }
 
 // GenerateVLANNetplanConfig generates the netplan configuration for a VLAN interface
 func GenerateVLANNetplanConfig(cfg VLANNetplanConfig) string {
 	if cfg.Interface == "" {
-		cfg.Interface = "enp1s0f1"
+		cfg.Interface = "eno2"
 	}
 
 	// Calculate the mask from subnet
@@ -46,11 +46,10 @@ func GenerateVLANNetplanConfig(cfg VLANNetplanConfig) string {
 	return fmt.Sprintf(`network:
   version: 2
   vlans:
-    vlan%d:
+    vlan.%d:
       id: %d
       link: %s
-      addresses:
-        - %s/%d
+      addresses: [%s/%d]
 `, cfg.VID, cfg.VID, cfg.Interface, cfg.IPAddress, maskSize)
 }
 
@@ -58,7 +57,7 @@ func GenerateVLANNetplanConfig(cfg VLANNetplanConfig) string {
 // This is injected into cloud-init to run early in the boot process
 func GenerateVLANSetupScript(cfg VLANNetplanConfig) string {
 	if cfg.Interface == "" {
-		cfg.Interface = "enp1s0f1"
+		cfg.Interface = "eno2"
 	}
 
 	// Calculate the mask from subnet
@@ -84,11 +83,10 @@ cat > /etc/netplan/60-vlan.yaml << EOF
 network:
   version: 2
   vlans:
-    vlan$VLAN_VID:
+    vlan.$VLAN_VID:
       id: $VLAN_VID
       link: $PARENT_IFACE
-      addresses:
-        - $VLAN_IP/$VLAN_MASK
+      addresses: [$VLAN_IP/$VLAN_MASK]
 EOF
 
 chmod 600 /etc/netplan/60-vlan.yaml
@@ -99,8 +97,8 @@ netplan apply 2>/dev/null || netplan generate && netplan apply
 
 # Verify VLAN interface is up
 for i in $(seq 1 30); do
-  if ip link show vlan$VLAN_VID 2>/dev/null | grep -q "state UP"; then
-    VLAN_ACTUAL_IP=$(ip -4 addr show vlan$VLAN_VID 2>/dev/null | grep -oP '(?<=inet\s)\d+(\.\d+){3}' | head -1)
+  if ip link show vlan.$VLAN_VID 2>/dev/null | grep -q "state UP"; then
+    VLAN_ACTUAL_IP=$(ip -4 addr show vlan.$VLAN_VID 2>/dev/null | grep -oP '(?<=inet\s)\d+(\.\d+){3}' | head -1)
     if [ -n "$VLAN_ACTUAL_IP" ]; then
       echo "VLAN $VLAN_VID configured successfully with IP: $VLAN_ACTUAL_IP"
       exit 0
@@ -111,7 +109,7 @@ for i in $(seq 1 30); do
 done
 
 echo "WARNING: VLAN interface may not be fully configured"
-ip addr show vlan$VLAN_VID 2>/dev/null || echo "VLAN interface not found"
+ip addr show vlan.$VLAN_VID 2>/dev/null || echo "VLAN interface not found"
 `, cfg.VID, cfg.IPAddress, maskSize, cfg.Interface)
 }
 
