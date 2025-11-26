@@ -136,6 +136,11 @@ func (in *LatitudeClusterStatus) DeepCopyInto(out *LatitudeClusterStatus) {
 		*out = new(string)
 		**out = **in
 	}
+	if in.VLANVID != nil {
+		in, out := &in.VLANVID, &out.VLANVID
+		*out = new(int)
+		**out = **in
+	}
 	if in.Conditions != nil {
 		in, out := &in.Conditions, &out.Conditions
 		*out = make([]v1.Condition, len(*in))

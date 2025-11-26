@@ -166,6 +166,10 @@ spec:
                 description: VLANID is the ID of the VLAN created or used by this
                   cluster
                 type: string
+              vlanVID:
+                description: VLANVID is the VLAN ID number (e.g., 2011) used for tagging
+                  traffic
+                type: integer
             type: object
         type: object
     served: true

@@ -64,6 +64,10 @@ type LatitudeClusterStatus struct {
 	// +optional
 	VLANID *string `json:"vlanID,omitempty"`
 
+	// VLANVID is the VLAN ID number (e.g., 2011) used for tagging traffic
+	// +optional
+	VLANVID *int `json:"vlanVID,omitempty"`
+
 	// Conditions defines current service state of the LatitudeCluster
 	// +optional
 	Conditions []metav1.Condition `json:"conditions,omitempty"`

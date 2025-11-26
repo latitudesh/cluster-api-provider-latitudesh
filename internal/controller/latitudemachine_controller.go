@@ -294,6 +294,13 @@ func (r *LatitudeMachineReconciler) reconcileServer(ctx context.Context, machine
 		return nil, fmt.Errorf("failed to get bootstrap data: %w", err)
 	}
 
+	// Inject VLAN configuration into userdata if VLAN is configured
+	userData, err = r.injectVLANConfig(ctx, latitudeMachine, userData)
+	if err != nil {
+		log.Error(err, "Failed to inject VLAN config into userdata")
+		// Continue without VLAN config - it can be configured manually
+	}
+
 	var udID string
 	if latitudeMachine.Status.UserDataID != "" {
 		udID = latitudeMachine.Status.UserDataID
@@ -694,4 +701,77 @@ func (r *LatitudeMachineReconciler) attachServerToVLAN(ctx context.Context, mach
 	r.recorder.Eventf(latitudeMachine, "Normal", "ServerAttachedToVLAN", "Attached server %s to VLAN %s", serverID, vlanID)
 
 	return nil
+}
+
+// injectVLANConfig injects VLAN netplan configuration into the userdata if VLAN is configured
+func (r *LatitudeMachineReconciler) injectVLANConfig(ctx context.Context, latitudeMachine *infrav1.LatitudeMachine, userData string) (string, error) {
+	log := crlog.FromContext(ctx)
+
+	// Get LatitudeCluster to check for VLAN config
+	latitudeCluster, err := r.getLatitudeCluster(ctx, latitudeMachine)
+	if err != nil {
+		return userData, fmt.Errorf("failed to get LatitudeCluster: %w", err)
+	}
+
+	// Skip if no VLAN configured
+	if latitudeCluster.Spec.VLANConfig == nil {
+		log.V(1).Info("No VLAN configuration specified, skipping VLAN injection")
+		return userData, nil
+	}
+
+	// Skip if VID not available yet
+	if latitudeCluster.Status.VLANVID == nil {
+		log.Info("VLAN VID not available yet, skipping VLAN injection")
+		return userData, nil
+	}
+
+	// Calculate machine index for IP assignment
+	// We use a hash of the machine name to get a consistent index
+	machineIndex := getMachineIndex(latitudeMachine.Name)
+
+	// Calculate IP address for this machine
+	subnet := latitudeCluster.Spec.VLANConfig.Subnet
+	ipAddress, err := CalculateVLANIPAddress(subnet, machineIndex)
+	if err != nil {
+		return userData, fmt.Errorf("failed to calculate VLAN IP address: %w", err)
+	}
+
+	vid := *latitudeCluster.Status.VLANVID
+	log.Info("Injecting VLAN configuration into userdata",
+		"vid", vid,
+		"subnet", subnet,
+		"ipAddress", ipAddress,
+		"machineIndex", machineIndex)
+
+	// Create VLAN config
+	cfg := VLANNetplanConfig{
+		VID:       vid,
+		Subnet:    subnet,
+		IPAddress: ipAddress,
+		Interface: "enp1s0f1", // Default secondary interface on Latitude servers
+	}
+
+	// Inject into userdata
+	modifiedUserData := InjectVLANConfigIntoCloudInit(userData, cfg)
+
+	log.Info("VLAN configuration injected into userdata successfully")
+	return modifiedUserData, nil
+}
+
+// getMachineIndex returns a consistent index for a machine based on its name
+// This is used to assign unique VLAN IPs to each machine
+func getMachineIndex(machineName string) int {
+	// Extract numeric suffix from machine name if present
+	// e.g., "cluster-control-plane-926v4" -> extract some unique number
+	// For simplicity, we'll use a hash-based approach
+	hash := 0
+	for _, c := range machineName {
+		hash = hash*31 + int(c)
+	}
+	// Return a positive number in range 0-240 (to fit in .10-.250 range)
+	index := hash % 241
+	if index < 0 {
+		index = -index
+	}
+	return index
 }

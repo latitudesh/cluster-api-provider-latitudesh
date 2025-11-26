@@ -266,15 +266,29 @@ func (r *LatitudeClusterReconciler) reconcileVLAN(ctx context.Context, latitudeC
 	if vlanConfig.ExistingVLANID != nil {
 		log.Info("Using existing VLAN", "vlanID", *vlanConfig.ExistingVLANID)
 		latitudeCluster.Status.VLANID = vlanConfig.ExistingVLANID
+		// Fetch VID from existing VLAN if not already set
+		if latitudeCluster.Status.VLANVID == nil {
+			existingVLAN, err := r.LatitudeClient.GetVLAN(ctx, *vlanConfig.ExistingVLANID)
+			if err != nil {
+				return fmt.Errorf("failed to get existing VLAN: %w", err)
+			}
+			latitudeCluster.Status.VLANVID = &existingVLAN.VID
+			log.Info("Retrieved VID from existing VLAN", "vid", existingVLAN.VID)
+		}
 		return nil
 	}
 
 	// Check if VLAN already created
 	if latitudeCluster.Status.VLANID != nil {
-		// Verify it still exists
-		_, err := r.LatitudeClient.GetVLAN(ctx, *latitudeCluster.Status.VLANID)
+		// Verify it still exists and get VID if missing
+		existingVLAN, err := r.LatitudeClient.GetVLAN(ctx, *latitudeCluster.Status.VLANID)
 		if err == nil {
-			log.Info("VLAN already exists", "vlanID", *latitudeCluster.Status.VLANID)
+			// Ensure VID is set in status
+			if latitudeCluster.Status.VLANVID == nil {
+				latitudeCluster.Status.VLANVID = &existingVLAN.VID
+				log.Info("Retrieved VID from existing VLAN", "vid", existingVLAN.VID)
+			}
+			log.Info("VLAN already exists", "vlanID", *latitudeCluster.Status.VLANID, "vid", *latitudeCluster.Status.VLANVID)
 			return nil
 		}
 		log.Info("VLAN no longer exists, creating new one")
@@ -301,6 +315,7 @@ func (r *LatitudeClusterReconciler) reconcileVLAN(ctx context.Context, latitudeC
 
 	log.Info("VLAN created successfully", "vlanID", vlan.ID, "vid", vlan.VID, "subnet", vlan.Subnet)
 	latitudeCluster.Status.VLANID = &vlan.ID
+	latitudeCluster.Status.VLANVID = &vlan.VID
 
 	// Record event
 	r.recorder.Eventf(latitudeCluster, "Normal", "VLANCreated", "Created VLAN %s with VID %d", vlan.ID, vlan.VID)
