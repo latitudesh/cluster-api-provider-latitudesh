@@ -88,7 +88,7 @@ spec:
       - your-cluster-endpoint.example.com  # Update to match controlPlaneEndpoint
       - 127.0.0.1
       - localhost
-  registrationMethod: internal-first
+  registrationMethod: control-plane-endpoint  # Use DNS from controlPlaneEndpoint for node registration
   rolloutStrategy:
     type: RollingUpdate
     rollingUpdate:
