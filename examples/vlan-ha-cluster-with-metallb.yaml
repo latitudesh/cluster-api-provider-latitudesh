@@ -16,6 +16,35 @@
 # - Creates/manages VLAN based on vlanConfig
 # - Injects VLAN netplan configuration into servers
 # - Assigns unique VLAN IPs to each server
+#
+# ============================================================================
+# DEPLOYMENT STEPS (DNS chicken-egg problem workaround):
+# ============================================================================
+#
+# Step 1: Deploy with 1 replica first
+#   - Edit RKE2ControlPlane below: set replicas: 1
+#   - kubectl apply -f vlan-ha-cluster-with-metallb.yaml
+#   - Wait for first control plane to be Ready:
+#     kubectl get machines -w
+#
+# Step 2: Configure DNS
+#   - Get the public IP of the first control plane server
+#   - Update your DNS record to point controlPlaneEndpoint.host to this IP
+#   - Verify DNS propagation: nslookup your-cluster-endpoint.example.com
+#
+# Step 3: Scale to 3 replicas for HA
+#   - kubectl patch rke2controlplane vlan-ha-cluster-control-plane \
+#       -p '{"spec":{"replicas":3}}' --type=merge
+#   - Wait for all 3 control planes to be Ready
+#
+# Step 4: (Optional) Add worker nodes
+#   - kubectl apply -f vlan-ha-workers.yaml
+#
+# Step 5: Configure MetalLB in the workload cluster
+#   - clusterctl get kubeconfig vlan-ha-cluster > /tmp/workload.kubeconfig
+#   - kubectl --kubeconfig=/tmp/workload.kubeconfig apply -f metallb-vlan-config.yaml
+#
+# ============================================================================
 
 apiVersion: cluster.x-k8s.io/v1beta1
 kind: Cluster
