@@ -22,6 +22,9 @@ import (
 	"strings"
 )
 
+// DefaultVLANInterface is the default parent interface for VLAN configuration
+const DefaultVLANInterface = "eno2"
+
 // VLANNetplanConfig holds configuration for generating VLAN netplan
 type VLANNetplanConfig struct {
 	VID       int    // VLAN ID number (e.g., 2011)
@@ -34,7 +37,7 @@ type VLANNetplanConfig struct {
 // Format per Latitude.sh docs: https://www.latitude.sh/docs/networking/private-networks
 func GenerateVLANNetplanConfig(cfg VLANNetplanConfig) string {
 	if cfg.Interface == "" {
-		cfg.Interface = "eno2"
+		cfg.Interface = DefaultVLANInterface
 	}
 
 	// Calculate the mask from subnet
@@ -61,7 +64,7 @@ func InjectVLANConfigIntoCloudInit(userData string, cfg VLANNetplanConfig) strin
 	}
 
 	if cfg.Interface == "" {
-		cfg.Interface = "eno2"
+		cfg.Interface = DefaultVLANInterface
 	}
 
 	// Calculate the mask from subnet
@@ -77,7 +80,7 @@ func InjectVLANConfigIntoCloudInit(userData string, cfg VLANNetplanConfig) strin
 	// Indentation: vlans (2 spaces), vlan.X (4 spaces), properties (6 spaces)
 	// Also configure node-ip for RKE2/kubelet so MetalLB can work
 	vlanCmd := fmt.Sprintf(`PRIV_IFACE=$(ip -4 addr show | grep -E "inet (100\.|10\.)" | grep -v "10\.10\." | awk '{print $NF}' | head -1); if [ -z "$PRIV_IFACE" ]; then PRIV_IFACE="%s"; fi; printf "\n  vlans:\n    vlan.%d:\n      id: %d\n      link: $PRIV_IFACE\n      addresses: [%s/%d]\n" >> /etc/netplan/50-cloud-init.yaml && netplan apply && mkdir -p /etc/rancher/rke2/config.yaml.d && echo "node-ip: %s" > /etc/rancher/rke2/config.yaml.d/99-node-ip.yaml`,
-		cfg.Interface, cfg.VID, cfg.VID, cfg.IPAddress, maskSize, cfg.IPAddress)
+		DefaultVLANInterface, cfg.VID, cfg.VID, cfg.IPAddress, maskSize, cfg.IPAddress)
 
 	// Check if userData already has runcmd section
 	if strings.Contains(userData, "runcmd:") {
