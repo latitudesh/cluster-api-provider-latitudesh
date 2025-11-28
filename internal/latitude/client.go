@@ -32,6 +32,22 @@ type Server struct {
 	IPAddress []string
 }
 
+// VLAN represents a Latitude.sh Virtual Network (VLAN)
+type VLAN struct {
+	ID      string
+	VID     int
+	Subnet  string
+	Project string
+}
+
+// CreateVLANRequest defines the parameters for creating a VLAN
+type CreateVLANRequest struct {
+	ProjectID string
+	Site      string
+	Subnet    string
+	VID       *int
+}
+
 // ClientInterface defines the methods for interacting with Latitude.sh API
 type ClientInterface interface {
 	CreateServer(ctx context.Context, spec ServerSpec) (*Server, error)
@@ -42,6 +58,14 @@ type ClientInterface interface {
 	GetAvailableRegions(ctx context.Context) ([]string, error)
 	CreateUserData(ctx context.Context, req CreateUserDataRequest) (string, error)
 	DeleteUserData(ctx context.Context, userDataID string) error
+
+	// VLAN management
+	CreateVLAN(ctx context.Context, req CreateVLANRequest) (*VLAN, error)
+	GetVLAN(ctx context.Context, vlanID string) (*VLAN, error)
+	ListVLANs(ctx context.Context, projectID string) ([]*VLAN, error)
+	DeleteVLAN(ctx context.Context, vlanID string) error
+	AttachServerToVLAN(ctx context.Context, serverID, vlanID string) error
+	DetachServerFromVLAN(ctx context.Context, serverID, vlanID string) error
 }
 
 var _ ClientInterface = (*Client)(nil)
@@ -280,5 +304,213 @@ func (c *Client) validateServerSpec(spec ServerSpec) error {
 	if spec.Site == "" {
 		return fmt.Errorf("site is required")
 	}
+	return nil
+}
+
+// CreateVLAN creates a new VLAN (Virtual Network) in the specified project
+// If a VLAN with the same description already exists, returns the existing VLAN instead of creating a new one
+func (c *Client) CreateVLAN(ctx context.Context, req CreateVLANRequest) (*VLAN, error) {
+	if req.ProjectID == "" {
+		return nil, fmt.Errorf("projectID is required")
+	}
+	if req.Subnet == "" {
+		return nil, fmt.Errorf("subnet is required")
+	}
+	if req.Site == "" {
+		return nil, fmt.Errorf("site is required")
+	}
+
+	// Check if a VLAN with the same description already exists (idempotency)
+	existingVLANs, err := c.ListVLANs(ctx, req.ProjectID)
+	if err != nil {
+		// Log but don't fail - we'll try to create anyway
+		fmt.Printf("Warning: failed to list existing VLANs: %v\n", err)
+	} else {
+		for _, existingVLAN := range existingVLANs {
+			if existingVLAN.Subnet == req.Subnet {
+				// Found existing VLAN with same description - return it instead of creating new one
+				fmt.Printf("Found existing VLAN with description %s, reusing ID: %s\n", req.Subnet, existingVLAN.ID)
+				return existingVLAN, nil
+			}
+		}
+	}
+
+	// No existing VLAN found, create a new one
+	// Convert site to lowercase for API compatibility
+	siteValue := strings.ToLower(req.Site)
+	site := operations.CreateVirtualNetworkPrivateNetworksSite(siteValue)
+	createReq := operations.CreateVirtualNetworkPrivateNetworksRequestBody{
+		Data: operations.CreateVirtualNetworkPrivateNetworksData{
+			Type: operations.CreateVirtualNetworkPrivateNetworksTypeVirtualNetwork,
+			Attributes: operations.CreateVirtualNetworkPrivateNetworksAttributes{
+				Project:     req.ProjectID,
+				Site:        &site,
+				Description: req.Subnet,
+			},
+		},
+	}
+
+	res, err := c.sdk.PrivateNetworks.Create(ctx, createReq)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create VLAN: %w", err)
+	}
+
+	if res.VirtualNetwork == nil || res.VirtualNetwork.Data == nil {
+		return nil, fmt.Errorf("empty response from VLAN creation")
+	}
+
+	vlanData := res.VirtualNetwork.Data
+	vlan := &VLAN{
+		ID:      *vlanData.ID,
+		Project: req.ProjectID,
+		Subnet:  req.Subnet,
+	}
+
+	// Parse VID from attributes if available
+	if vlanData.Attributes != nil && vlanData.Attributes.Vid != nil {
+		vlan.VID = int(*vlanData.Attributes.Vid)
+	}
+
+	return vlan, nil
+}
+
+// GetVLAN retrieves VLAN information by ID
+func (c *Client) GetVLAN(ctx context.Context, vlanID string) (*VLAN, error) {
+	if vlanID == "" {
+		return nil, fmt.Errorf("vlanID is required")
+	}
+
+	res, err := c.sdk.PrivateNetworks.Get(ctx, vlanID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get VLAN: %w", err)
+	}
+
+	if res.Object == nil || res.Object.Data == nil || res.Object.Data.Data == nil {
+		return nil, fmt.Errorf("VLAN not found: %s", vlanID)
+	}
+
+	vlanData := res.Object.Data.Data
+	vlan := &VLAN{
+		ID: *vlanData.ID,
+	}
+
+	if vlanData.Attributes != nil {
+		if vlanData.Attributes.Description != nil {
+			vlan.Subnet = *vlanData.Attributes.Description
+		}
+		if vlanData.Attributes.Vid != nil {
+			vlan.VID = int(*vlanData.Attributes.Vid)
+		}
+	}
+
+	return vlan, nil
+}
+
+// ListVLANs lists all VLANs accessible to the API key
+// Note: Returns all VLANs, filtering by description should be done by caller
+func (c *Client) ListVLANs(ctx context.Context, projectID string) ([]*VLAN, error) {
+	// List all virtual networks using PrivateNetworks.List with proper request
+	req := operations.GetVirtualNetworksRequest{}
+	res, err := c.sdk.PrivateNetworks.List(ctx, req)
+	if err != nil {
+		return nil, fmt.Errorf("failed to list VLANs: %w", err)
+	}
+
+	var vlans []*VLAN
+	if res.VirtualNetworks != nil && res.VirtualNetworks.Data != nil {
+		for _, vlanData := range res.VirtualNetworks.Data {
+			if vlanData.Attributes == nil {
+				continue
+			}
+
+			vlan := &VLAN{
+				ID:      *vlanData.ID,
+				Project: projectID, // Set to requested project ID
+			}
+
+			if vlanData.Attributes.Description != nil {
+				vlan.Subnet = *vlanData.Attributes.Description
+			}
+			if vlanData.Attributes.Vid != nil {
+				vlan.VID = int(*vlanData.Attributes.Vid)
+			}
+
+			vlans = append(vlans, vlan)
+		}
+	}
+
+	return vlans, nil
+}
+
+// DeleteVLAN deletes a VLAN by ID
+func (c *Client) DeleteVLAN(ctx context.Context, vlanID string) error {
+	if vlanID == "" {
+		return fmt.Errorf("vlanID is required")
+	}
+
+	_, err := c.sdk.VirtualNetworks.Delete(ctx, vlanID)
+	if err != nil {
+		// Check if already deleted
+		if strings.Contains(err.Error(), "not found") || strings.Contains(err.Error(), "404") {
+			return nil
+		}
+		return fmt.Errorf("failed to delete VLAN: %w", err)
+	}
+
+	return nil
+}
+
+// AttachServerToVLAN attaches a server to a VLAN
+func (c *Client) AttachServerToVLAN(ctx context.Context, serverID, vlanID string) error {
+	if serverID == "" {
+		return fmt.Errorf("serverID is required")
+	}
+	if vlanID == "" {
+		return fmt.Errorf("vlanID is required")
+	}
+
+	assignReq := operations.AssignServerVirtualNetworkPrivateNetworksRequestBody{
+		Data: &operations.AssignServerVirtualNetworkPrivateNetworksData{
+			Type: operations.AssignServerVirtualNetworkPrivateNetworksTypeVirtualNetworkAssignment,
+			Attributes: &operations.AssignServerVirtualNetworkPrivateNetworksAttributes{
+				ServerID:         serverID,
+				VirtualNetworkID: vlanID,
+			},
+		},
+	}
+
+	_, err := c.sdk.PrivateNetworks.Assign(ctx, assignReq)
+	if err != nil {
+		// Check if already assigned
+		if strings.Contains(err.Error(), "already assigned") || strings.Contains(err.Error(), "already exists") {
+			return nil
+		}
+		return fmt.Errorf("failed to attach server to VLAN: %w", err)
+	}
+
+	return nil
+}
+
+// DetachServerFromVLAN detaches a server from a VLAN
+func (c *Client) DetachServerFromVLAN(ctx context.Context, serverID, vlanID string) error {
+	if serverID == "" {
+		return fmt.Errorf("serverID is required")
+	}
+	if vlanID == "" {
+		return fmt.Errorf("vlanID is required")
+	}
+
+	// Note: The assignment ID format may need to be adjusted based on API behavior
+	assignmentID := fmt.Sprintf("%s-%s", serverID, vlanID)
+
+	_, err := c.sdk.PrivateNetworks.DeleteAssignment(ctx, assignmentID)
+	if err != nil {
+		// Check if already detached
+		if strings.Contains(err.Error(), "not found") || strings.Contains(err.Error(), "404") {
+			return nil
+		}
+		return fmt.Errorf("failed to detach server from VLAN: %w", err)
+	}
+
 	return nil
 }
