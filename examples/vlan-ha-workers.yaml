@@ -1,0 +1,143 @@
+---
+# Worker Nodes for VLAN HA Cluster
+#
+# Prerequisites:
+# - The vlan-ha-cluster must already be running with control plane nodes
+# - Workers will automatically join via the control plane endpoint DNS
+#
+# Usage:
+#   kubectl apply -f vlan-ha-workers.yaml
+
+apiVersion: cluster.x-k8s.io/v1beta1
+kind: MachineDeployment
+metadata:
+  name: vlan-ha-cluster-workers
+  namespace: default
+spec:
+  clusterName: vlan-ha-cluster
+  replicas: 2
+  selector:
+    matchLabels:
+      cluster.x-k8s.io/cluster-name: vlan-ha-cluster
+      cluster.x-k8s.io/deployment-name: vlan-ha-cluster-workers
+  template:
+    metadata:
+      labels:
+        cluster.x-k8s.io/cluster-name: vlan-ha-cluster
+        cluster.x-k8s.io/deployment-name: vlan-ha-cluster-workers
+    spec:
+      clusterName: vlan-ha-cluster
+      version: v1.30.0+rke2r1
+      bootstrap:
+        configRef:
+          apiVersion: bootstrap.cluster.x-k8s.io/v1beta1
+          kind: RKE2ConfigTemplate
+          name: vlan-ha-cluster-workers
+      infrastructureRef:
+        apiVersion: infrastructure.cluster.x-k8s.io/v1beta1
+        kind: LatitudeMachineTemplate
+        name: vlan-ha-cluster-workers
+---
+apiVersion: infrastructure.cluster.x-k8s.io/v1beta1
+kind: LatitudeMachineTemplate
+metadata:
+  name: vlan-ha-cluster-workers
+  namespace: default
+spec:
+  template:
+    spec:
+      plan: "c2-small-x86"
+      operatingSystem: "ubuntu_24_04_x64_lts"
+      sshKeySecretRef:
+        name: latitude-ssh-keys
+        namespace: default
+---
+apiVersion: bootstrap.cluster.x-k8s.io/v1beta1
+kind: RKE2ConfigTemplate
+metadata:
+  name: vlan-ha-cluster-workers
+  namespace: default
+spec:
+  template:
+    spec:
+      agentConfig:
+        nodeName: '{{ ds.meta_data.hostname }}'
+      files:
+        # Script to get server ID from Latitude API for providerID
+        - path: /usr/local/bin/get-latitude-server-id.sh
+          owner: root:root
+          permissions: "0755"
+          content: |-
+            #!/bin/bash
+            API_KEY="${LATITUDE_API_KEY:-}"
+            PROJECT_ID="${LATITUDE_PROJECT_ID:-}"
+
+            if [ -z "$API_KEY" ] || [ -z "$PROJECT_ID" ]; then
+              echo "ERROR: LATITUDE_API_KEY and LATITUDE_PROJECT_ID must be set" >&2
+              exit 1
+            fi
+
+            PUBLIC_IP=$(curl -s --connect-timeout 5 ifconfig.me || hostname -I | awk '{print $1}')
+            RESPONSE=$(curl -s --connect-timeout 10 \
+              -H "Authorization: Bearer $API_KEY" \
+              "https://api.latitude.sh/servers?filter%5Bproject%5D=$PROJECT_ID")
+
+            SERVER_ID=$(echo "$RESPONSE" | python3 -c "
+            import sys, json
+            data = json.load(sys.stdin)
+            target_ip = '$PUBLIC_IP'
+            for server in data.get('data', []):
+                if server.get('attributes', {}).get('primary_ipv4') == target_ip:
+                    print(server['id'])
+                    sys.exit(0)
+            sys.exit(1)
+            " 2>/dev/null)
+
+            if [ -n "$SERVER_ID" ]; then
+              echo "$SERVER_ID"
+            else
+              exit 1
+            fi
+
+        # Latitude API credentials
+        - path: /etc/latitude-credentials
+          owner: root:root
+          permissions: "0600"
+          content: |-
+            LATITUDE_API_KEY=your_api_key_here
+            LATITUDE_PROJECT_ID=proj_xxxxx
+
+      preRKE2Commands:
+        # Firewall configuration for workers
+        - ufw --force enable
+        - ufw default deny incoming
+        - ufw default allow outgoing
+        - ufw allow 22/tcp
+        - ufw allow 10250/tcp
+        - ufw allow 4789/udp
+        - ufw allow 5473/tcp comment 'Calico Typha'
+        - ufw allow 30000:32767/tcp comment 'NodePort Services'
+
+        # Kernel modules and networking
+        - modprobe overlay
+        - modprobe br_netfilter
+        - sysctl -w net.bridge.bridge-nf-call-iptables=1
+        - sysctl -w net.ipv4.ip_forward=1
+        - swapoff -a
+
+        # Configure providerID from Latitude API
+        - |
+          . /etc/latitude-credentials
+          export LATITUDE_API_KEY LATITUDE_PROJECT_ID
+          SERVER_ID=$(/usr/local/bin/get-latitude-server-id.sh 2>/dev/null || echo "")
+          if [ -n "$SERVER_ID" ]; then
+            mkdir -p /etc/rancher/rke2/config.yaml.d
+            echo "kubelet-arg:" > /etc/rancher/rke2/config.yaml.d/99-provider-id.yaml
+            echo "  - \"provider-id=latitude://$SERVER_ID\"" >> /etc/rancher/rke2/config.yaml.d/99-provider-id.yaml
+            echo "Configured providerID: latitude://$SERVER_ID"
+          fi
+
+      postRKE2Commands:
+        # Remove cloud provider taint (required without CCM)
+        - sleep 10
+        - /var/lib/rancher/rke2/bin/kubectl --kubeconfig /etc/rancher/rke2/rke2.yaml taint nodes --all node.cloudprovider.kubernetes.io/uninitialized- || true
