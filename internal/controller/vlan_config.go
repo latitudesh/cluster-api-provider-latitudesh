@@ -79,9 +79,8 @@ func InjectVLANConfigIntoCloudInit(userData string, cfg VLANNetplanConfig) strin
 	// We detect it dynamically since interface names vary (eno2, enp1s0f1, etc.)
 	// Indentation: vlans (2 spaces), vlan.X (4 spaces), properties (6 spaces)
 	// Also configure node-ip for RKE2/kubelet so MetalLB can work
-	vlanCmd := fmt.Sprintf(`PRIV_IFACE=$(ip -4 addr show | grep -E "inet (100\.|10\.)" | grep -v "10\.10\." | awk '{print $NF}' | head -1); if [ -z "$PRIV_IFACE" ]; then PRIV_IFACE="%s"; fi; printf "\n  vlans:\n    vlan.%d:\n      id: %d\n      link: $PRIV_IFACE\n      addresses: [%s/%d]\n" >> /etc/netplan/50-cloud-init.yaml && netplan apply && mkdir -p /etc/rancher/rke2/config.yaml.d && echo "node-ip: %s" > /etc/rancher/rke2/config.yaml.d/99-node-ip.yaml`,
+	vlanCmd := fmt.Sprintf(`if ! command -v yq >/dev/null 2>&1; then apt-get update -qq && apt-get install -y yq >/dev/null 2>&1; fi;PRIV_IFACE=$(yq -r '.network.ethernets | to_entries[] | select(.value.gateway4 == null) | .key' /etc/netplan/50-cloud-init.yaml 2>/dev/null | head -1); if [ -z "$PRIV_IFACE" ]; then PRIV_IFACE="%s"; fi; printf "\n    vlans:\n        vlan.%d:\n            id: %d\n            link: $PRIV_IFACE\n            addresses: [%s/%d]\n" >> /etc/netplan/50-cloud-init.yaml && netplan apply && mkdir -p /etc/rancher/rke2/config.yaml.d && echo "node-ip: %s" > /etc/rancher/rke2/config.yaml.d/99-node-ip.yaml`,
 		DefaultVLANInterface, cfg.VID, cfg.VID, cfg.IPAddress, maskSize, cfg.IPAddress)
-
 	// Check if userData already has runcmd section
 	if strings.Contains(userData, "runcmd:") {
 		// Insert after runcmd: line (so it runs first)
