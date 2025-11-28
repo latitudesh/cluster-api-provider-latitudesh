@@ -1,0 +1,406 @@
+---
+# High Availability RKE2 Cluster with VLAN + kube-vip + MetalLB
+#
+# This example demonstrates:
+# - 3-node HA control plane with kube-vip for VIP failover
+# - VLAN networking for private node communication
+# - Control plane endpoint on VLAN (internal access only)
+# - MetalLB for LoadBalancer services
+# - Automatic providerID configuration
+#
+# Prerequisites:
+# 1. Create SSH keys secret:
+#    kubectl create secret generic latitude-ssh-keys --from-literal=authorized_keys="ssh-ed25519 ..."
+# 2. Update: projectID, location, controlPlaneEndpoint, tlsSan, credentials, and VIP
+# 3. Management cluster must be on the same VLAN to access the control plane
+#
+# The controller automatically:
+# - Creates/manages VLAN based on vlanConfig
+# - Injects VLAN netplan configuration into servers
+# - Assigns unique VLAN IPs to each server
+#
+# ============================================================================
+# NETWORK ARCHITECTURE:
+# ============================================================================
+#
+#                     ┌─────────────────────────────────────┐
+#                     │         VLAN (10.10.0.0/24)         │
+#                     │                                     │
+#  mgmt cluster       │   VIP: 10.10.0.100 (kube-vip)       │
+#  (10.10.0.2)  ──────│─────────────↓                       │
+#                     │      ┌──────┼──────┐                │
+#                     │      ↓      ↓      ↓                │
+#                     │    cp-0   cp-1   cp-2               │
+#                     │    .10    .11    .12                │
+#                     └─────────────────────────────────────┘
+#
+# ============================================================================
+# DEPLOYMENT STEPS:
+# ============================================================================
+#
+# Step 1: Configure management cluster VLAN access
+#   - Add mgmt cluster to the same VLAN
+#   - Configure VLAN interface with IP (e.g., 10.10.0.2/24)
+#   - Test connectivity: ping 10.10.0.10 (after first CP is up)
+#
+# Step 2: Configure DNS (pointing to VIP)
+#   - Create DNS record: your-cluster-endpoint.example.com → 10.10.0.100
+#   - This is the VIP that kube-vip will manage
+#
+# Step 3: Deploy with 1 replica first
+#   - Edit RKE2ControlPlane below: set replicas: 1
+#   - kubectl apply -f vlan-ha-cluster-with-kubevip.yaml
+#   - Wait for first control plane to be Ready:
+#     kubectl get machines -w
+#
+# Step 4: Verify kube-vip is running
+#   - SSH to the control plane and check:
+#     crictl ps | grep kube-vip
+#     ip addr show | grep 10.10.0.100
+#
+# Step 5: Scale to 3 replicas for HA
+#   - kubectl patch rke2controlplane vlan-ha-cluster-control-plane \
+#       -p '{"spec":{"replicas":3}}' --type=merge
+#
+# Step 6: Test HA failover
+#   - Get kubeconfig: clusterctl get kubeconfig vlan-ha-cluster > /tmp/workload.kubeconfig
+#   - Watch nodes: kubectl --kubeconfig=/tmp/workload.kubeconfig get nodes -w
+#   - Reboot the CP holding the VIP and verify failover
+#
+# ============================================================================
+
+apiVersion: cluster.x-k8s.io/v1beta1
+kind: Cluster
+metadata:
+  name: vlan-ha-cluster
+  namespace: default
+spec:
+  clusterNetwork:
+    pods:
+      cidrBlocks: ["10.244.0.0/16"]
+    services:
+      cidrBlocks: ["10.96.0.0/12"]
+  controlPlaneEndpoint:
+    host: "your-cluster-endpoint.example.com"  # DNS pointing to VIP (10.10.0.100)
+    port: 6443
+  controlPlaneRef:
+    apiVersion: controlplane.cluster.x-k8s.io/v1beta1
+    kind: RKE2ControlPlane
+    name: vlan-ha-cluster-control-plane
+  infrastructureRef:
+    apiVersion: infrastructure.cluster.x-k8s.io/v1beta1
+    kind: LatitudeCluster
+    name: vlan-ha-cluster
+---
+apiVersion: infrastructure.cluster.x-k8s.io/v1beta1
+kind: LatitudeCluster
+metadata:
+  name: vlan-ha-cluster
+  namespace: default
+spec:
+  location: "SAO2"  # Update with your location
+  projectRef:
+    projectID: "proj_xxxxx"  # Update with your project ID
+  vlanConfig:
+    subnet: "10.10.0.0/24"  # VLAN subnet for private node communication
+---
+apiVersion: infrastructure.cluster.x-k8s.io/v1beta1
+kind: LatitudeMachineTemplate
+metadata:
+  name: vlan-ha-cluster-control-plane
+  namespace: default
+spec:
+  template:
+    spec:
+      plan: "c2-small-x86"
+      operatingSystem: "ubuntu_24_04_x64_lts"
+      sshKeySecretRef:
+        name: latitude-ssh-keys
+        namespace: default
+---
+apiVersion: controlplane.cluster.x-k8s.io/v1beta1
+kind: RKE2ControlPlane
+metadata:
+  name: vlan-ha-cluster-control-plane
+  namespace: default
+spec:
+  replicas: 1  # Start with 1, scale to 3 after DNS is configured
+  version: v1.30.0+rke2r1
+  infrastructureRef:
+    apiVersion: infrastructure.cluster.x-k8s.io/v1beta1
+    kind: LatitudeMachineTemplate
+    name: vlan-ha-cluster-control-plane
+  agentConfig:
+    nodeName: '{{ ds.meta_data.hostname }}'
+  serverConfig:
+    cni: calico
+    cloudProviderName: external
+    tlsSan:
+      - your-cluster-endpoint.example.com  # Update to match controlPlaneEndpoint
+      - 10.10.0.100  # VIP address
+      - 127.0.0.1
+      - localhost
+  registrationMethod: control-plane-endpoint
+  rolloutStrategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+  files:
+    # Script to get server ID from Latitude API for providerID
+    - path: /usr/local/bin/get-latitude-server-id.sh
+      owner: root:root
+      permissions: "0755"
+      content: |-
+        #!/bin/bash
+        API_KEY="${LATITUDE_API_KEY:-}"
+        PROJECT_ID="${LATITUDE_PROJECT_ID:-}"
+
+        if [ -z "$API_KEY" ] || [ -z "$PROJECT_ID" ]; then
+          echo "ERROR: LATITUDE_API_KEY and LATITUDE_PROJECT_ID must be set" >&2
+          exit 1
+        fi
+
+        PUBLIC_IP=$(curl -s --connect-timeout 5 ifconfig.me || hostname -I | awk '{print $1}')
+        RESPONSE=$(curl -s --connect-timeout 10 \
+          -H "Authorization: Bearer $API_KEY" \
+          "https://api.latitude.sh/servers?filter%5Bproject%5D=$PROJECT_ID")
+
+        SERVER_ID=$(echo "$RESPONSE" | python3 -c "
+        import sys, json
+        data = json.load(sys.stdin)
+        target_ip = '$PUBLIC_IP'
+        for server in data.get('data', []):
+            if server.get('attributes', {}).get('primary_ipv4') == target_ip:
+                print(server['id'])
+                sys.exit(0)
+        sys.exit(1)
+        " 2>/dev/null)
+
+        if [ -n "$SERVER_ID" ]; then
+          echo "$SERVER_ID"
+        else
+          exit 1
+        fi
+
+    # Latitude API credentials
+    - path: /etc/latitude-credentials
+      owner: root:root
+      permissions: "0600"
+      content: |-
+        LATITUDE_API_KEY=your_api_key_here
+        LATITUDE_PROJECT_ID=proj_xxxxx
+
+    # kube-vip configuration - VIP address for control plane HA
+    - path: /etc/kube-vip-config
+      owner: root:root
+      permissions: "0644"
+      content: |-
+        VIP_ADDRESS=10.10.0.100
+
+    # Script to generate kube-vip RBAC and manifest with detected VLAN interface
+    - path: /usr/local/bin/generate-kube-vip-manifest.sh
+      owner: root:root
+      permissions: "0755"
+      content: |-
+        #!/bin/bash
+        set -e
+
+        # Load VIP configuration
+        source /etc/kube-vip-config
+
+        # Detect VLAN interface (format: vlan.XXXX)
+        VLAN_IFACE=$(ip -o link show | grep -oP 'vlan\.\d+' | head -1)
+
+        if [ -z "$VLAN_IFACE" ]; then
+          echo "ERROR: No VLAN interface found. Waiting for VLAN configuration..."
+          exit 1
+        fi
+
+        echo "Detected VLAN interface: $VLAN_IFACE"
+        echo "Configuring kube-vip with VIP: $VIP_ADDRESS"
+
+        # Create the kube-vip static pod manifest
+        mkdir -p /var/lib/rancher/rke2/server/manifests
+
+        # Create RBAC for kube-vip (required for leader election)
+        cat > /var/lib/rancher/rke2/server/manifests/kube-vip-rbac.yaml << 'EOFRBAC'
+        apiVersion: v1
+        kind: ServiceAccount
+        metadata:
+          name: kube-vip
+          namespace: kube-system
+        ---
+        apiVersion: rbac.authorization.k8s.io/v1
+        kind: ClusterRole
+        metadata:
+          name: kube-vip-role
+        rules:
+          - apiGroups: [""]
+            resources: ["services", "services/status", "nodes", "endpoints"]
+            verbs: ["list", "get", "watch", "update"]
+          - apiGroups: ["coordination.k8s.io"]
+            resources: ["leases"]
+            verbs: ["list", "get", "watch", "update", "create"]
+        ---
+        apiVersion: rbac.authorization.k8s.io/v1
+        kind: ClusterRoleBinding
+        metadata:
+          name: kube-vip-binding
+        roleRef:
+          apiGroup: rbac.authorization.k8s.io
+          kind: ClusterRole
+          name: kube-vip-role
+        subjects:
+          - kind: ServiceAccount
+            name: kube-vip
+            namespace: kube-system
+        EOFRBAC
+
+        # Create kube-vip DaemonSet manifest (runs on all control plane nodes)
+        cat > /var/lib/rancher/rke2/server/manifests/kube-vip.yaml << EOF
+        apiVersion: apps/v1
+        kind: DaemonSet
+        metadata:
+          name: kube-vip
+          namespace: kube-system
+          labels:
+            app: kube-vip
+        spec:
+          selector:
+            matchLabels:
+              app: kube-vip
+          template:
+            metadata:
+              labels:
+                app: kube-vip
+            spec:
+              hostNetwork: true
+              serviceAccountName: kube-vip
+              tolerations:
+                - effect: NoSchedule
+                  operator: Exists
+                - effect: NoExecute
+                  operator: Exists
+              affinity:
+                nodeAffinity:
+                  requiredDuringSchedulingIgnoredDuringExecution:
+                    nodeSelectorTerms:
+                      - matchExpressions:
+                          - key: node-role.kubernetes.io/control-plane
+                            operator: Exists
+              containers:
+              - name: kube-vip
+                image: ghcr.io/kube-vip/kube-vip:v0.8.0
+                imagePullPolicy: IfNotPresent
+                args:
+                  - manager
+                env:
+                  - name: vip_arp
+                    value: "true"
+                  - name: port
+                    value: "6443"
+                  - name: vip_interface
+                    value: "${VLAN_IFACE}"
+                  - name: vip_address
+                    value: "${VIP_ADDRESS}"
+                  - name: cp_enable
+                    value: "true"
+                  - name: cp_namespace
+                    value: "kube-system"
+                  - name: vip_leaderelection
+                    value: "true"
+                  - name: vip_leasename
+                    value: "plndr-cp-lock"
+                  - name: vip_leaseduration
+                    value: "5"
+                  - name: vip_renewdeadline
+                    value: "3"
+                  - name: vip_retryperiod
+                    value: "1"
+                securityContext:
+                  capabilities:
+                    add:
+                      - NET_ADMIN
+                      - NET_RAW
+        EOF
+
+        echo "kube-vip RBAC and DaemonSet manifest created successfully"
+
+  preRKE2Commands:
+    # Firewall configuration
+    - ufw --force enable
+    - ufw default deny incoming
+    - ufw default allow outgoing
+    - ufw allow 22/tcp
+    - ufw allow 6443/tcp
+    - ufw allow 9345/tcp
+    - ufw allow 2379:2380/tcp
+    - ufw allow 10250/tcp
+    - ufw allow 10259/tcp
+    - ufw allow 10257/tcp
+    - ufw allow 4789/udp
+    - ufw allow 5473/tcp comment 'Calico Typha'
+
+    # Kernel modules and networking
+    - modprobe overlay
+    - modprobe br_netfilter
+    - sysctl -w net.bridge.bridge-nf-call-iptables=1
+    - sysctl -w net.ipv4.ip_forward=1
+    - swapoff -a
+
+    # Configure providerID from Latitude API
+    - |
+      . /etc/latitude-credentials
+      export LATITUDE_API_KEY LATITUDE_PROJECT_ID
+      SERVER_ID=$(/usr/local/bin/get-latitude-server-id.sh 2>/dev/null || echo "")
+      if [ -n "$SERVER_ID" ]; then
+        mkdir -p /etc/rancher/rke2/config.yaml.d
+        echo "kubelet-arg:" > /etc/rancher/rke2/config.yaml.d/99-provider-id.yaml
+        echo "  - \"provider-id=latitude://$SERVER_ID\"" >> /etc/rancher/rke2/config.yaml.d/99-provider-id.yaml
+        echo "Configured providerID: latitude://$SERVER_ID"
+      fi
+
+    # Wait for VLAN interface to be configured, then generate kube-vip manifest
+    - |
+      echo "Waiting for VLAN interface to be configured..."
+      for i in $(seq 1 30); do
+        if ip -o link show | grep -q 'vlan\.'; then
+          echo "VLAN interface detected"
+          /usr/local/bin/generate-kube-vip-manifest.sh
+          break
+        fi
+        echo "Waiting for VLAN interface... ($i/30)"
+        sleep 2
+      done
+      if ! ip -o link show | grep -q 'vlan\.'; then
+        echo "WARNING: VLAN interface not found after 60 seconds. kube-vip may not start correctly."
+      fi
+
+  postRKE2Commands:
+    - export KUBECONFIG=/etc/rancher/rke2/rke2.yaml
+    - sleep 30
+    # Remove cloud provider taint (required without CCM)
+    - /var/lib/rancher/rke2/bin/kubectl --kubeconfig /etc/rancher/rke2/rke2.yaml taint nodes --all node.cloudprovider.kubernetes.io/uninitialized- || true
+    # Verify kube-vip is running
+    - |
+      echo "Checking kube-vip status..."
+      for i in $(seq 1 10); do
+        if /var/lib/rancher/rke2/bin/kubectl --kubeconfig /etc/rancher/rke2/rke2.yaml get pods -n kube-system | grep -q kube-vip; then
+          echo "kube-vip pod found"
+          /var/lib/rancher/rke2/bin/kubectl --kubeconfig /etc/rancher/rke2/rke2.yaml get pods -n kube-system -l app=kube-vip
+          break
+        fi
+        sleep 5
+      done
+    # Check if VIP is assigned
+    - |
+      source /etc/kube-vip-config
+      if ip addr show | grep -q "$VIP_ADDRESS"; then
+        echo "VIP $VIP_ADDRESS is active on this node"
+      else
+        echo "VIP $VIP_ADDRESS not active on this node (may be on another control plane)"
+      fi
+    # Install MetalLB
+    - /var/lib/rancher/rke2/bin/kubectl apply -f https://raw.githubusercontent.com/metallb/metallb/v0.14.9/config/manifests/metallb-native.yaml
+    - /var/lib/rancher/rke2/bin/kubectl wait --namespace metallb-system --for=condition=ready pod --selector=app=metallb --timeout=120s || true
+    - echo "Control plane ready - apply IPAddressPool and L2Advertisement to complete MetalLB setup"
